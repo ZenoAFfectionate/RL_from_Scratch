@@ -1,0 +1,113 @@
+import os
+import sys
+import json
+import argparse
+
+from vllm import LLM, SamplingParams
+
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(current_dir)
+sys.path.append(project_root)
+
+from utils.rewards import mmlu_reward_fn
+from utils.vllm_helper import evaluate_vllm
+
+
+MMLU_USER_PROMPT_TEMPLATE="""
+Answer the following multiple choice question about {subject}. 
+Respond with a single sentence of the form "The correct answer is _", 
+filling the blank with the letter corresponding to the correct answer (i.e., A, B, C or D).
+
+Question: {question}
+A. {options[0]}
+B. {options[1]}
+C. {options[2]}
+D. {options[3]}
+Answer:
+"""
+
+
+def format_mmlu_prompt(example):
+    """
+    Constructs the prompt using ONLY the user template.
+    """
+    question = example["question"]
+    subject = example.get("subject", "general knowledge") 
+    options = example["options"] 
+    # fill in user prompt template
+    full_prompt = MMLU_USER_PROMPT_TEMPLATE.format(
+        subject=subject,
+        question=question,
+        options=options
+    )
+    return full_prompt
+
+
+def index_to_letter(index: int) -> str:
+    """Convert an index (0, 1, 2, 3) to a letter (A, B, C, D)."""
+    return chr(ord('A') + int(index))
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Evaluate a VLLM model on MMLU (Zero-shot).")
+    
+    parser.add_argument(
+        "--model_name",
+        type=str,
+        default="Qwen/Qwen3-4B",
+        help="The name or path of the model to use."
+    )
+    parser.add_argument(
+        "--dataset_name",
+        type=str,
+        default="mmlu",
+        help="The dataset to evaluate on."
+    )
+
+    parser.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature.")
+    parser.add_argument("--top_p", type=float, default=1.0, help="Top-p sampling.")
+    parser.add_argument("--min_tokens", type=int, default=1,   help="Minimum number of tokens to generate.")
+    parser.add_argument("--max_tokens", type=int, default=128, help="Maximum number of tokens to generate.")
+
+    args = parser.parse_args()
+
+    print(f"Running MMLU Zero-shot evaluation with parameters:")
+    print(f"  - Model: {args.model_name}")
+    print(f"  - Dataset: {args.dataset_name}")
+    print(f"  - Temperature: {args.temperature} (Greedy)")
+    print(f"  - Top-p: {args.top_p}")
+
+
+    # loading validation dataset
+    dataset = []  
+    print(f"Loading validation set ...", end=' ')
+    with open(f"../data/{args.dataset_name}/valid.jsonl", "r") as f:
+        for line in f: dataset.append(json.loads(line))
+    print(f"Success!\nLoaded {len(dataset)} examples.")
+
+    # create prompts and extract ground truth from dataset
+    prompts = [format_mmlu_prompt(example) for example in dataset]
+    ground_truth = [index_to_letter(e["answer"]) for e in dataset]
+
+    # initialize model by means of vLLM
+    print(f"Initializing vLLM with model: {args.model_name}")
+    vllm_model = LLM(model=args.model_name, trust_remote_code=True)
+    
+    sampling_params = SamplingParams(
+        temperature=args.temperature,
+        top_p=args.top_p,
+        min_tokens=args.min_tokens,
+        max_tokens=args.max_tokens,
+        stop=["\n", "Question:"], 
+        include_stop_str_in_output=False
+    )
+    
+    # evaluate the model
+    evaluate_vllm(
+        vllm_model=vllm_model,
+        reward_fn=mmlu_reward_fn, 
+        prompts=prompts,       # 
+        answers=ground_truth,  # 
+        eval_sampling_params=sampling_params,
+        output_filepath=f"../results/baseline_mmlu.jsonl"
+    )
