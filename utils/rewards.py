@@ -17,6 +17,43 @@ def mmlu_reward_fn(response: str, ground_truth: str) -> dict:
         return {"reward": 0.0, "prediction": prediction}
 
 
+def gsmk_reward_fn(completion: str, ground_truth: str) -> float:
+    """Reward function that compares the parsed model completion against the ground truth."""
+    def parse_gsm8k_response(response: str) -> float:
+        '''Parses the language model output to extract the final numeric answer.'''
+        if response is None: return None
+        # create pattern and find all matches
+        pattern = r'-?\d+(?:,\d{3})*(?:\.\d+)?'
+        matches = re.findall(pattern, response)
+
+        if not matches: return None
+        # take final number and remove commas
+        last_number_str = matches[-1]
+        clean_number_str = last_number_str.replace(',', '')
+        # 
+        try:
+            return float(clean_number_str)
+        except ValueError:
+            return None
+    
+    # 1. parse the model's prediction
+    pred_val = parse_gsm8k_response(completion)
+    if pred_val is None: return {"reward": 0.0, "prediction": None}
+
+    if "####" in str(ground_truth):
+        gt_str = str(ground_truth).split("####")[-1].strip()
+    else:
+        gt_str = str(ground_truth).strip()
+
+    # 2. parse the ground truth answer
+    gt_val = parse_gsm8k_response(gt_str)
+    if gt_val is None: return {"reward": 0.0, "prediction": None}
+
+    # 3. compare and assign reward
+    reward = 1.0 if abs(pred_val - gt_val) < 0.01 else 0.0
+    return {"reward": reward, "prediction": pred_val}
+
+
 def question_only_reward_fn(response, ground_truth, fast=True):
     """Reward function for question-only evaluation."""
     model_answer = extract_answer(response)
