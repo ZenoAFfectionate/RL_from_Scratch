@@ -172,4 +172,4 @@ data/
 results/
 checkpoints/
 
-test/fixtures/
+tests/fixtures/

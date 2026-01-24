@@ -25,7 +25,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model_name",
         type=str,
-        default="Qwen/Qwen2.5-Math-7B",  # "Qwen/Qwen2.5-Math-1.5B"
+        default="Qwen/Qwen2.5-Math-7B",
         help="The name or path of the model to use from Hugging Face Hub."
     )
     parser.add_argument(

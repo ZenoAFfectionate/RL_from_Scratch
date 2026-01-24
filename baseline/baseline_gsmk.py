@@ -37,7 +37,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model_name",
         type=str,
-        default="Qwen/Qwen3-4B",
+        default="Qwen/Qwen2.5-7B-Instruct",
         help="The name or path of the model to use."
     )
     parser.add_argument(
@@ -50,7 +50,7 @@ if __name__ == "__main__":
     parser.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature.")
     parser.add_argument("--top_p", type=float, default=1.0, help="Top-p sampling.")
     parser.add_argument("--min_tokens", type=int, default=1,   help="Minimum number of tokens to generate.")
-    parser.add_argument("--max_tokens", type=int, default=128, help="Maximum number of tokens to generate.")
+    parser.add_argument("--max_tokens", type=int, default=512, help="Maximum number of tokens to generate.")
 
     args = parser.parse_args()
 

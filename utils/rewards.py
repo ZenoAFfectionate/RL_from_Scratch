@@ -30,7 +30,7 @@ def gsmk_reward_fn(completion: str, ground_truth: str) -> float:
         # take final number and remove commas
         last_number_str = matches[-1]
         clean_number_str = last_number_str.replace(',', '')
-        # 
+
         try:
             return float(clean_number_str)
         except ValueError:
@@ -90,9 +90,9 @@ def question_only_reward_fn(response, ground_truth, fast=True):
 
 def r1_zero_reward_fn(response, ground_truth, fast=True):
     """Reward function for R1-zero like evaluation."""
-    # We are strict about format to evaluate our models.
     if re.search(r"</think>\s*<answer>", response) and "</answer>" in response:
         model_answer = response.split("<answer>")[-1].replace("</answer>", "")
+        # 
         if "\\boxed" in model_answer:
             model_answer = extract_answer(model_answer)
             if model_answer is None:
@@ -103,27 +103,31 @@ def r1_zero_reward_fn(response, ground_truth, fast=True):
                 }
         if isinstance(ground_truth, float) or isinstance(ground_truth, int):
             ground_truth = str(ground_truth)
+        
+        # check the correctness of model answer:
         if isinstance(ground_truth, str):
             is_correct = grade(model_answer, ground_truth, fast)
         elif isinstance(ground_truth, list):
             is_correct = False
             for gt in ground_truth:
                 is_correct |= grade(model_answer, gt, fast)
+
         if is_correct:
+            # formatted and right answer;
             return {
                 "format_reward": 1.0,
                 "answer_reward": 1.0,
                 "reward": 1.0
             }
         else:
-            # Formatted but wrong answer; no format reward to avoid hacking.
+            # formatted but wrong answer;
             return {
                 "format_reward": 1.0,
                 "answer_reward": 0.0,
                 "reward": 0.0
             }
     else:
-        # Unformatted.
+        # both unformatted and wrong answer...
         return {
             "format_reward": 0.0,
             "answer_reward": 0.0,
