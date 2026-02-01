@@ -105,6 +105,43 @@ class SpeculativeDecoder:
         )
 
         return list(output[0].outputs[0].token_ids)
+    
+    def generate_draft_tree(self, input_ids: List[int], depth: int = 4, width: int = 2):
+        """Generate tree-structured candidate tokens."""
+        from collections import deque
+
+        tree = []
+        queue = deque([(input_ids, 0, [])])  # (current_ids, depth, path)
+
+        sampling_params = SamplingParams(
+            temperature=0.7,  # need some randomness
+            top_k=width,
+            max_tokens=1,
+            logprobs=width,
+            detokenize=False
+        )
+
+        while queue and len(tree) < width ** depth:
+            current_ids, d, path = queue.popleft()
+            if d >= depth:
+                tree.append(path)
+                continue
+
+            output = self.draft_llm.generate(
+                prompt_token_ids=current_ids,
+                sampling_params=sampling_params,
+                use_tqdm=False
+            )
+
+            # get top-k candidates
+            logprobs = output[0].outputs[0].logprobs[0]
+            top_tokens = sorted(logprobs.keys(), key=lambda x: logprobs[x].logprob, reverse=True)[:width]
+
+            for token in top_tokens:
+                new_path = path + [token]
+                queue.append((current_ids + [token], d + 1, new_path))
+
+        return tree
 
     def verify_tokens(self, input_ids: List[int], draft_tokens: List[int]) -> Tuple[List[int], int, bool]:
         """
