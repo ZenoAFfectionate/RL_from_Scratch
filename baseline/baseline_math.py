@@ -25,7 +25,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model_name",
         type=str,
-        default="Qwen/Qwen2.5-Math-7B",
+        default="Qwen/Qwen2.5-Math-7B-Instruct",  # 1.5B
         help="The name or path of the model to use from Hugging Face Hub."
     )
     parser.add_argument(
@@ -35,9 +35,8 @@ if __name__ == "__main__":
         help="The dataset to evaluate on."
     )
     
-    parser.add_argument("--temperature", type=float, default=1.0, help="Sampling temperature.")
+    parser.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature.")
     parser.add_argument("--top_p", type=float, default=1.0, help="Top-p (nucleus) sampling.")
-    parser.add_argument("--min_tokens", type=int, default=128,  help="Minimum number of tokens to generate.")
     parser.add_argument("--max_tokens", type=int, default=4096, help="Maximum number of tokens to generate.")
 
     args = parser.parse_args()
@@ -47,8 +46,7 @@ if __name__ == "__main__":
     print(f"  - Dataset: {args.dataset_name}")
     print(f"  - Top-p: {args.top_p}")
     print(f"  - Temperature: {args.temperature}")
-    print(f"  - Max Tokens: {args.max_tokens}")
-    print(f"  - Min Tokens: {args.min_tokens}\n")
+    print(f"  - Max Tokens: {args.max_tokens}\n")
 
     # load dataset and prompt template
     dataset = []  
@@ -64,11 +62,10 @@ if __name__ == "__main__":
     # load vLLM model and create a sampling params object
     vllm_model = LLM(model=args.model_name, trust_remote_code=True)
     sampling_params = SamplingParams(
-        temperature=args.temperature,  # 
-        top_p=args.top_p,              # 
-        min_tokens=args.min_tokens,    # 
-        max_tokens=args.max_tokens,    # 
-        stop=["<\answer>"],            # 
+        temperature=args.temperature,
+        top_p=args.top_p,
+        max_tokens=args.max_tokens,
+        stop=["</answer>"],  # Fixed: was "<\answer>" (escape sequence bug)
         include_stop_str_in_output=True
     )
 

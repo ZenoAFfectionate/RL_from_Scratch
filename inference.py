@@ -49,13 +49,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--num_speculative_tokens",
         type=int,
-        default=32,
+        default=64,
         help="Number of tokens to speculate per iteration."
     )
     parser.add_argument(
         "--batch_size",
         type=int,
-        default=32,
+        default=64,
         help="Batch size for parallel generation."
     )
 
@@ -72,7 +72,7 @@ if __name__ == "__main__":
     # Load dataset and prompt template
     dataset = []
     print(f"Loading validation set ...", end=' ')
-    with open(f"../data/{args.dataset_name}/test.jsonl", "r") as f:
+    with open(f"../data/{args.dataset_name}/valid.jsonl", "r") as f:
         for line in f: dataset.append(json.loads(line))
     print(f"Success!\nLoaded {len(dataset)} examples.\n")
 
@@ -101,8 +101,7 @@ if __name__ == "__main__":
         batch_end = min(batch_start + args.batch_size, len(prompts))
         batch_prompts = prompts[batch_start:batch_end]
 
-        print(
-            f"\n[Batch {batch_idx + 1}/{num_batches}] Processing {len(batch_prompts)} prompts...")
+        print(f"\n[Batch {batch_idx + 1}/{num_batches}] Processing {len(batch_prompts)} prompts...")
 
         # Generate outputs using speculative decoding with all optimizations
         gen_start = time.time()
@@ -127,7 +126,7 @@ if __name__ == "__main__":
     print("\nValidating responses...")
     val_start = time.time()
     for i, (response, ground_truth) in enumerate(zip(responses, ground_truth_answers)):
-        # comprehensive validation using r1_zero_reward_fn
+        # response now contains only generated tokens (prompt excluded by speculative_decode)
         reward_result = r1_zero_reward_fn(response, ground_truth)
 
         result = {
@@ -144,14 +143,14 @@ if __name__ == "__main__":
     total_val_time = time.time() - val_start
 
     # store the results to a JSONL file
-    with open("../data/results/baseline_speculative.jsonl", "w") as f:
-        for result in results:
-            f.write(json.dumps(result) + "\n")
+    os.makedirs("../results", exist_ok=True)
+    with open("../results/baseline_speculative.jsonl", "w") as f:
+        for result in results: f.write(json.dumps(result) + "\n")
 
     # compute summary statistics
-    total_problems = len(results)
-    format_correct = sum(1 for r in results if r["format_reward"] > 0)
-    answer_correct = sum(1 for r in results if r["is_correct"])
+    total_problems = len(responses)
+    format_correct = sum(1 for r in results if r["format_reward"] == 1.0)
+    answer_correct = sum(1 for r in results if r["is_correct"] is True)
 
     # print the results summary
     print("\n" + "=" * 60)
