@@ -6,6 +6,7 @@ import random
 import argparse
 import tqdm as tqdm_module
 from tqdm import tqdm
+from datetime import datetime
 
 import torch
 from torch.optim import AdamW
@@ -67,13 +68,13 @@ if __name__ == "__main__":
 
     print("Loading train and valid data...")
     with open(args.train_path, 'r') as f:
-        full_train_data = [json.loads(line) for line in f]
+        train_data = [json.loads(line) for line in f]
     with open(args.valid_path, 'r') as f:
-        full_valid_data = [json.loads(line) for line in f]
+        valid_data = [json.loads(line) for line in f]
     
     # Prepare evaluation data and vLLM instance
-    problems = [item["problem"]  for item in full_valid_data]
-    solution = [item["solution"] for item in full_valid_data]
+    problems = [item["problem"]  for item in valid_data]
+    solution = [item["solution"] for item in valid_data]
 
     # -----------------------------------------
     #  Initialize vLLM instance for evaluation
@@ -89,107 +90,130 @@ if __name__ == "__main__":
     )
 
     # ==========================================
-    #  PART 1: Run SFT on varying dataset sizes
+    #  Run SFT Training
     # ==========================================
     print("")
-    experiment_configs = [
-        {"name": "128_examples", "data": full_train_data[:128]},
-        {"name": "256_examples", "data": full_train_data[:256]},
-        {"name": "512_examples", "data": full_train_data[:512]},
-        {"name": "1024_examples", "data": full_train_data[:1024]},
-        {"name": "full_dataset", "data": full_train_data},
-    ]
 
-    for config in experiment_configs:
-        train_data = config["data"]
-        run_name = f"sft_{config['name']}_lr{args.lr}"
-        print(f"\n> Starting SFT run: {run_name} with {len(train_data)} examples")
+    # -----------------------------------------
+    #  Setup output directory and record file
+    # -----------------------------------------
+    output_dir = "../checkpoints/SFT4Math"
+    os.makedirs(output_dir, exist_ok=True)
+    record_path = os.path.join(output_dir, "record.txt")
 
-        wandb.init(project=args.wandb_project, name=run_name, config=args, reinit=True)
-        wandb.define_metric("train_step")
-        wandb.define_metric("valid_step")
-        wandb.define_metric("train/*", step_metric="train_step")
-        wandb.define_metric("valid/*", step_metric="valid_step")
-        
-        # ---------------------------------------
-        #  Initialize tokenizer and policy model
-        # ---------------------------------------
-        policy, tokenizer = init_policy(args.model_id, args.policy_device)
-        if tokenizer.pad_token is None: tokenizer.pad_token = tokenizer.eos_token
+    with open(record_path, 'w') as f:
+        f.write(f"SFT Math Training Record - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write("=" * 60 + "\n\n")
 
-        # Compile model for faster training (PyTorch 2.0+)
-        print("Compiling policy model with torch.compile()...")
-        policy = torch.compile(policy)
+    def log_to_file(message):
+        """Write message to both console and record file."""
+        print(message)
+        with open(record_path, 'a') as f:
+            f.write(message + '\n')
 
-        optimizer = AdamW(policy.parameters(), lr=args.lr, weight_decay=0.0, betas=(0.9, 0.95), fused=True)
+    # Log training configuration
+    config_info = f"""
+        {'='*60}
+        Training Configuration
+        {'='*60}
+        Model: {args.model_id}
+        Epochs: {args.epochs}
+        Batch Size: {args.batch_size} (micro: {args.micro_batch_size})
+        Gradient Accumulation Steps: {args.gradient_accumulation_steps}
+        Learning Rate: {args.lr}
+        Training Samples: {len(train_data)}
+        Validation Samples: {len(valid_data)}
+        Output Directory: {output_dir}
+        {'='*60}
+    """
+    log_to_file(config_info)
 
-        def collate_fn(batch):
-            prompts   = [b['prompt']   for b in batch]
-            responses = [b['response'] for b in batch]
-            return tokenize_prompt_and_output(prompts, responses, tokenizer)
-        train_loader = DataLoader(
-            train_data,
-            batch_size=args.micro_batch_size,
-            shuffle=True,
-            collate_fn=collate_fn,
-            num_workers=16,
-            pin_memory=True,
-            persistent_workers=True
-        )
-        
-        train_step, valid_step = 0, 0
-        best_acc = 0.0
+    run_name = f"sft_math_lr{args.lr}"
+    log_to_file(f"\n> Starting SFT run: {run_name} with {len(train_data)} examples")
+
+    wandb.init(project=args.wandb_project, name=run_name, config=args)
+    wandb.define_metric("train_step")
+    wandb.define_metric("valid_step")
+    wandb.define_metric("train/*", step_metric="train_step")
+    wandb.define_metric("valid/*", step_metric="valid_step")
+
+    # ---------------------------------------
+    #  Initialize tokenizer and policy model
+    # ---------------------------------------
+    policy, tokenizer = init_policy(args.model_id, args.policy_device)
+    if tokenizer.pad_token is None: tokenizer.pad_token = tokenizer.eos_token
+
+    # Compile model for faster training (PyTorch 2.0+)
+    log_to_file("Compiling policy model with torch.compile()...")
+    policy = torch.compile(policy)
+
+    optimizer = AdamW(policy.parameters(), lr=args.lr, weight_decay=0.0, betas=(0.9, 0.95), fused=True)
+
+    def collate_fn(batch):
+        prompts   = [b['prompt']   for b in batch]
+        responses = [b['response'] for b in batch]
+        return tokenize_prompt_and_output(prompts, responses, tokenizer)
+    train_loader = DataLoader(
+        train_data,
+        batch_size=args.micro_batch_size,
+        shuffle=True,
+        collate_fn=collate_fn,
+        num_workers=16,
+        pin_memory=True,
+        persistent_workers=True
+    )
+
+    train_step, valid_step = 0, 0
+    best_acc = 0.0
+    policy.train()
+
+    # ======================= #
+    # Start SFT Training Loop #
+    # ======================= #
+    for epoch in range(args.epochs):
+
+        # ====== Training Logic ====== #
+        for i, batch in enumerate(tqdm(train_loader, desc=f"Epoch {epoch+1}", ncols=100)):
+            # prepare batch data and move to device (non-blocking for async transfer)
+            input_ids = batch['input_ids'].to(args.policy_device, non_blocking=True)
+            labels = batch['labels'].to(args.policy_device, non_blocking=True)
+            response_mask = batch['response_mask'].to(args.policy_device, non_blocking=True)
+
+            # get log probabilities from the model and compute loss
+            results = get_response_log_probs(policy, input_ids, labels, True)
+            loss, metadata = sft_microbatch_train_step(
+                results['log_probs'], response_mask, args.gradient_accumulation_steps,
+                normalize_constant=response_mask.sum()
+            )
+
+            if (i + 1) % args.gradient_accumulation_steps == 0:
+                clip_grad_norm_(policy.parameters(), args.clip_grad_norm)
+                optimizer.step()
+                optimizer.zero_grad(set_to_none=True)  # More efficient than zero_grad()
+                wandb.log({"train/loss": loss.item(), "train_step": train_step})
+                train_step += 1
+
+        # ====== Validation Logic ====== #
+        policy.eval()
+        load_policy_into_vllm_instance(policy, eval_vllm)
+        output_path = f"./results/math/finetune.jsonl" if epoch == args.epochs - 1 else None
+        acc = evaluate_vllm(eval_vllm, r1_zero_reward_fn, problems, solution, eval_sampling_params, output_path)
+
         policy.train()
-        
-        # ======================= #
-        # Start SFT Training Loop #
-        # ======================= #
-        for epoch in range(args.epochs):
-            
-            # ====== Training Logic ====== #
-            for i, batch in enumerate(tqdm(train_loader, desc=f"Epoch {epoch+1}", ncols=100)):  #
-                # prepare batch data and move to device (non-blocking for async transfer)
-                input_ids = batch['input_ids'].to(args.policy_device, non_blocking=True)
-                labels = batch['labels'].to(args.policy_device, non_blocking=True)
-                response_mask = batch['response_mask'].to(args.policy_device, non_blocking=True)
-                
-                results = get_response_log_probs(policy, input_ids, labels, True)
-                
-                # call the microbatch train step function
-                loss, metadata = sft_microbatch_train_step(
-                    results['log_probs'], response_mask, args.gradient_accumulation_steps,
-                    normalize_constant=response_mask.sum()
-                )
-                
-                if (i + 1) % args.gradient_accumulation_steps == 0:
-                    clip_grad_norm_(policy.parameters(), args.clip_grad_norm)
-                    optimizer.step()
-                    optimizer.zero_grad()
-                    wandb.log({"train/loss": loss.item(), "train_step": train_step})
-                    train_step += 1
-                    
-            # ====== Validation Logic ====== #
-            policy.eval()
-            load_policy_into_vllm_instance(policy, eval_vllm)
-            output_path = f"./results/math/finetune.jsonl" if epoch == args.epochs - 1 else None
-            acc = evaluate_vllm(eval_vllm, r1_zero_reward_fn, problems, solution, eval_sampling_params, output_path)
-        
-            policy.train()
-            valid_step += 1
-            print(f"Step {train_step}: Validation Accuracy = {acc:.2f}%")
+        valid_step += 1
+        log_to_file(f"Step {train_step}: Validation Accuracy = {acc:.2f}%")
 
-            if acc > best_acc:
-                best_acc = acc
-                model_save_path = f"../checkpoints/Qwen2.5-Math-1.5B/{run_name}_best.pt"
-                os.makedirs(os.path.dirname(model_save_path), exist_ok=True)
-                torch.save(policy.state_dict(), model_save_path)
-                print(f"New best model saved to {model_save_path} with accuracy {best_acc:.2f}%")
-            wandb.log({"valid/accuracy": acc, "valid_step": valid_step})
+        if acc > best_acc:
+            best_acc = acc
+            model_save_path = os.path.join(output_dir, f"{run_name}_best.pt")
+            torch.save(policy.state_dict(), model_save_path)
+            log_to_file(f"New best model saved to {model_save_path} with accuracy {best_acc:.2f}%")
+        wandb.log({"valid/accuracy": acc, "valid_step": valid_step})
 
-            optimizer.zero_grad()
+        optimizer.zero_grad()
 
-        del policy, optimizer, train_loader
-        torch.cuda.empty_cache()
-        wandb.finish()
+    del policy, optimizer, train_loader
+    torch.cuda.empty_cache()
+    wandb.finish()
 
-    print("\nAll experiments complete.")
+    log_to_file("\nTraining complete.")
