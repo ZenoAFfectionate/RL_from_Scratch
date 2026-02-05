@@ -201,7 +201,7 @@ def compute_validation_loss(
     total_loss = 0.0
     total_tokens = 0
     
-    with torch.no_grad():
+    with torch.inference_mode():
         for batch in tqdm(val_loader, desc="Validation"):
             input_ids = batch['input_ids'].to(device)
             labels = batch['labels'].to(device)

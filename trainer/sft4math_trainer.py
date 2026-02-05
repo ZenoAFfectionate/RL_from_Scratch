@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import wandb
 import random
@@ -13,7 +14,16 @@ from torch.nn.utils import clip_grad_norm_
 
 from vllm import SamplingParams
 
-from algorithms.sft import *
+# Add parent directory to path for imports
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(current_dir)
+sys.path.insert(0, project_root)
+
+from algorithms.sft import (
+    tokenize_prompt_and_output,
+    get_response_log_probs,
+    sft_microbatch_train_step
+)
 from utils.vllm_helper import *
 from utils.rewards import r1_zero_reward_fn
 
@@ -37,8 +47,8 @@ if __name__ == "__main__":
     parser.add_argument("--clip_grad_norm", type=float, default=1.0, help="Gradient clipping value.")
     # --- Logistics ---
     parser.add_argument("--seed", type=int, default=42, help="Random seed.")
-    parser.add_argument("--policy_device", type=str, default="cuda:2", help="Device for the training policy.")
-    parser.add_argument("--eval_device",   type=str, default="cuda:3", help="Device for the vLLM evaluation instance.")
+    parser.add_argument("--policy_device", type=str, default="cuda:0", help="Device for the training policy.")
+    parser.add_argument("--eval_device",   type=str, default="cuda:1", help="Device for the vLLM evaluation instance.")
     parser.add_argument("--wandb_project", type=str, default="SFT-MATH", help="W&B project name.")
 
     args = parser.parse_args()
