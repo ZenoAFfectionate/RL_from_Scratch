@@ -3,7 +3,8 @@ import wandb
 import random
 import argparse
 import numpy as np
-import tqdm as tqdm
+import tqdm as tqdm_module
+from tqdm import tqdm
 
 import torch
 from torch.optim import AdamW
@@ -22,9 +23,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run GRPO on Qwen-Math model.")
 
     # --- Paths and Models ---
-    parser.add_argument("--model_id", type=str, default="Qwen/Qwen2.5-Math-1.5B", help="Base model ID.")
-    parser.add_argument("--train_path", type=str, default="../data/math/train.jsonl", help="Path to train data.")
-    parser.add_argument("--valid_path", type=str, default="../data/math/test.jsonl", help="Path to valid data.")
+    parser.add_argument("--model_id", type=str, default="Qwen/Qwen2.5-Math-1.5B")
+    parser.add_argument("--train_path", type=str, default="../data/math/train.jsonl")
+    parser.add_argument("--valid_path", type=str, default="../data/math/test.jsonl")
     
     # --- GRPO Specific Hyperparameters ---
     parser.add_argument("--n_grpo_steps", type=int, default=200, help="Number of GRPO steps.")
@@ -124,7 +125,7 @@ if __name__ == "__main__":
     print("\n>>> Starting GRPO Training Loop")
     global_step = 0
     accumu_step = 0
-    for step in tqdm(range(args.n_grpo_steps), desc="GRPO Steps"):
+    for step in tqdm(range(args.n_grpo_steps), desc="GRPO Steps", ncols=100):
         # --------------------
         # 1. generate rollouts
         # --------------------

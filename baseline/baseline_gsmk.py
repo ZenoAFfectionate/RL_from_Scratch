@@ -34,18 +34,8 @@ def format_gsmk_prompt(example):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate a VLLM model on GSM8K (Zero-shot).")
     
-    parser.add_argument(
-        "--model_name",
-        type=str,
-        default="Qwen/Qwen2.5-7B-Instruct",
-        help="The name or path of the model to use."
-    )
-    parser.add_argument(
-        "--dataset_name",
-        type=str,
-        default="gsmk",
-        help="The dataset to evaluate on."
-    )
+    parser.add_argument("--model_name", type=str, default="Qwen/Qwen3-1.7B",)
+    parser.add_argument("--dataset_name", type=str, default="gsmk")
 
     parser.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature.")
     parser.add_argument("--top_p", type=float, default=1.0, help="Top-p sampling.")
@@ -74,7 +64,7 @@ if __name__ == "__main__":
 
     # initialize model by means of vLLM
     print(f"Initializing vLLM with model: {args.model_name}")
-    vllm_model = LLM(model=args.model_name, trust_remote_code=True)
+    vllm_model = LLM(model=args.model_name, trust_remote_code=True, max_model_len=4096)
     
     sampling_params = SamplingParams(
         temperature=args.temperature,

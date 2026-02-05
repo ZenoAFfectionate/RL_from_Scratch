@@ -3,7 +3,8 @@ import json
 import wandb
 import random
 import argparse
-import tqdm as tqdm
+import tqdm as tqdm_module
+from tqdm import tqdm
 
 import torch
 from torch.optim import AdamW
@@ -20,9 +21,9 @@ from utils.rewards import r1_zero_reward_fn
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run SFT on Qwen-Math model.")
     # --- Paths and Models ---
-    parser.add_argument("--model_id", type=str, default="Qwen/Qwen2.5-Math-1.5B", help="Base model ID from Hugging Face.")
-    parser.add_argument("--train_path", type=str, default="../data/math/sft_naive.jsonl", help="Path to SFT train data.")
-    parser.add_argument("--valid_path", type=str, default="../data/math/test.jsonl",      help="Path to valid data.")
+    parser.add_argument("--model_id", type=str, default="Qwen/Qwen2.5-Math-1.5B")
+    parser.add_argument("--train_path", type=str, default="../data/math/sft_train.jsonl")
+    parser.add_argument("--valid_path", type=str, default="../data/math/test.jsonl")
     parser.add_argument("--top_p", type=float, default=1.0,  help="Top-p sampling probability.")
     parser.add_argument("--temperature", type=float, default=1.0,  help="Sampling temperature.")
     parser.add_argument("--min_tokens", type=int, default=8,    help="Minimum number of tokens.")
@@ -48,6 +49,11 @@ if __name__ == "__main__":
     # Set random seeds for reproducibility
     torch.manual_seed(args.seed)
     random.seed(args.seed)
+
+    # Enable cuDNN benchmark and TF32 for faster training
+    torch.backends.cudnn.benchmark = True
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
 
     print("Loading train and valid data...")
     with open(args.train_path, 'r') as f:
@@ -77,10 +83,10 @@ if __name__ == "__main__":
     # ==========================================
     print("")
     experiment_configs = [
-        # {"name": "128_examples", "data": full_train_data[:128]},
-        # {"name": "256_examples", "data": full_train_data[:256]},
-        # {"name": "512_examples", "data": full_train_data[:512]},
-        # {"name": "1024_examples", "data": full_train_data[:1024]},
+        {"name": "128_examples", "data": full_train_data[:128]},
+        {"name": "256_examples", "data": full_train_data[:256]},
+        {"name": "512_examples", "data": full_train_data[:512]},
+        {"name": "1024_examples", "data": full_train_data[:1024]},
         {"name": "full_dataset", "data": full_train_data},
     ]
 
@@ -101,13 +107,25 @@ if __name__ == "__main__":
         policy, tokenizer = init_policy(args.model_id, args.policy_device)
         if tokenizer.pad_token is None: tokenizer.pad_token = tokenizer.eos_token
 
-        optimizer = AdamW(policy.parameters(), lr=args.lr, weight_decay=0.0, betas=(0.9, 0.95),)
+        # Compile model for faster training (PyTorch 2.0+)
+        print("Compiling policy model with torch.compile()...")
+        policy = torch.compile(policy)
+
+        optimizer = AdamW(policy.parameters(), lr=args.lr, weight_decay=0.0, betas=(0.9, 0.95), fused=True)
 
         def collate_fn(batch):
             prompts   = [b['prompt']   for b in batch]
             responses = [b['response'] for b in batch]
             return tokenize_prompt_and_output(prompts, responses, tokenizer)
-        train_loader = DataLoader(train_data, batch_size=args.micro_batch_size, shuffle=True, collate_fn=collate_fn)
+        train_loader = DataLoader(
+            train_data,
+            batch_size=args.micro_batch_size,
+            shuffle=True,
+            collate_fn=collate_fn,
+            num_workers=16,
+            pin_memory=True,
+            persistent_workers=True
+        )
         
         train_step, valid_step = 0, 0
         best_acc = 0.0
@@ -118,12 +136,12 @@ if __name__ == "__main__":
         # ======================= #
         for epoch in range(args.epochs):
             
-            # ====== Training Logic ====== # 
-            for i, batch in enumerate(tqdm(train_loader, desc=f"Epoch {epoch+1}")):  #
-                # prepare batch data and move to device
-                input_ids = batch['input_ids'].to(args.policy_device)
-                labels = batch['labels'].to(args.policy_device)
-                response_mask = batch['response_mask'].to(args.policy_device)
+            # ====== Training Logic ====== #
+            for i, batch in enumerate(tqdm(train_loader, desc=f"Epoch {epoch+1}", ncols=100)):  #
+                # prepare batch data and move to device (non-blocking for async transfer)
+                input_ids = batch['input_ids'].to(args.policy_device, non_blocking=True)
+                labels = batch['labels'].to(args.policy_device, non_blocking=True)
+                response_mask = batch['response_mask'].to(args.policy_device, non_blocking=True)
                 
                 results = get_response_log_probs(policy, input_ids, labels, True)
                 
@@ -150,7 +168,7 @@ if __name__ == "__main__":
             valid_step += 1
             print(f"Step {train_step}: Validation Accuracy = {acc:.2f}%")
 
-            if acc > best_acc:  # store best model
+            if acc > best_acc:
                 best_acc = acc
                 model_save_path = f"../checkpoints/Qwen2.5-Math-1.5B/{run_name}_best.pt"
                 os.makedirs(os.path.dirname(model_save_path), exist_ok=True)

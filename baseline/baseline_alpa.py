@@ -8,22 +8,11 @@ from vllm import LLM, SamplingParams
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate AlpacaEval predictions with vLLM.")
     
-    parser.add_argument(
-        "--model_name",
-        type=str,
-        default="Qwen/Qwen2.5-7B-Instruct",
-        help="The name or path of the model to use."
-    )
-    parser.add_argument(
-        "--dataset_name",
-        type=str,
-        default="alpa",
-        help="The dataset to evaluate on."
-    )
+    parser.add_argument("--model_name", type=str, default="Qwen/Qwen3-1.7B")
+    parser.add_argument("--dataset_name", type=str, default="alpa")
 
     parser.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature.")
     parser.add_argument("--top_p", type=float, default=1.0, help="Top-p sampling.")
-    parser.add_argument("--min_tokens", type=int, default=2,   help="Minimum number of tokens to generate.")
     parser.add_argument("--max_tokens", type=int, default=512, help="Maximum number of tokens to generate.")
 
     args = parser.parse_args()
@@ -44,14 +33,18 @@ if __name__ == "__main__":
     prompts = [example["instruction"] for example in dataset]
 
     # initialize model by means of vLLM
+    # Note: max_model_len limits context length to avoid OOM with large context models
     print(f"Initializing vLLM with model: {args.model_name}")
-    vllm_model = LLM(model=args.model_name, trust_remote_code=True)
+    vllm_model = LLM(
+        model=args.model_name,
+        trust_remote_code=True,
+        max_model_len=4096,
+    )
 
     sampling_params = SamplingParams(
         temperature=args.temperature,
         top_p=args.top_p,
         max_tokens=args.max_tokens,
-        min_tokens=args.min_tokens,
         # do not want strict stop tokens
     )
 
@@ -73,8 +66,9 @@ if __name__ == "__main__":
         }
         results.append(entry)
 
-    # save results to file
+    # save results to file (JSONL format: one JSON object per line)
     with open("../results/baseline_alpa.jsonl", "w", encoding="utf-8") as fout:
-        json.dump(results, fout, indent=2, ensure_ascii=False)
+        for entry in results: fout.write(json.dumps(entry, ensure_ascii=False) + "\n")
         
+    print(f"Saved {len(results)} results to ../results/baseline_alpa.jsonl")
     print("Done!")

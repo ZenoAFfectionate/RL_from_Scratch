@@ -2,7 +2,8 @@ import os
 import json
 import wandb
 import argparse
-import tqdm as tqdm
+import tqdm as tqdm_module
+from tqdm import tqdm
 import random
 import numpy as np
 from typing import List, Dict
@@ -168,9 +169,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run Expert Iteration on Qwen-Math model.")
 
     # Model and data paths
-    parser.add_argument("--model_id", type=str, default="Qwen/Qwen2.5-Math-1.5B",     help="Base model ID")
-    parser.add_argument("--train_path", type=str, default="../data/math/train.jsonl", help="Path to MATH train data")
-    parser.add_argument("--valid_path", type=str, default="../data/math/test.jsonl",  help="Path to validation data")
+    parser.add_argument("--model_id", type=str, default="Qwen/Qwen2.5-Math-1.5B", help="Base model ID")
+    parser.add_argument("--train_path", type=str, default="../data/ultrachat/train.jsonl")
+    parser.add_argument("--valid_path", type=str, default="../data/ultrachat/test.jsonl")
 
     # Sampling parameters
     parser.add_argument("--top_p", type=float, default=1.0, help="Top-p sampling")
@@ -245,7 +246,7 @@ if __name__ == "__main__":
     # Initialize models
     policy, tokenizer = init_policy(args.model_id, args.policy_device)
     tokenizer.pad_token = tokenizer.eos_token
-    optimizer = AdamW(policy.parameters(), lr=args.lr)
+    optimizer = AdamW(policy.parameters(), lr=args.lr, weight_decay=0.0, betas=(0.9, 0.95))
 
     # Initialize evaluation vLLM
     eval_vllm = init_vllm(args.model_id, args.eval_device, args.seed)

@@ -51,22 +51,11 @@ def index_to_letter(index: int) -> str:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate a VLLM model on MMLU (Zero-shot).")
     
-    parser.add_argument(
-        "--model_name",
-        type=str,
-        default="Qwen/Qwen2.5-7B-Instruct",
-        help="The name or path of the model to use."
-    )
-    parser.add_argument(
-        "--dataset_name",
-        type=str,
-        default="mmlu",
-        help="The dataset to evaluate on."
-    )
+    parser.add_argument("--model_name", type=str, default="Qwen/Qwen3-1.7B")
+    parser.add_argument("--dataset_name", type=str, default="mmlu")
 
     parser.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature.")
     parser.add_argument("--top_p", type=float, default=1.0, help="Top-p sampling.")
-    parser.add_argument("--min_tokens", type=int, default=1,   help="Minimum number of tokens to generate.")
     parser.add_argument("--max_tokens", type=int, default=256, help="Maximum number of tokens to generate.")
 
     args = parser.parse_args()
@@ -91,12 +80,11 @@ if __name__ == "__main__":
 
     # initialize model by means of vLLM
     print(f"Initializing vLLM with model: {args.model_name}")
-    vllm_model = LLM(model=args.model_name, trust_remote_code=True)
+    vllm_model = LLM(model=args.model_name, trust_remote_code=True, max_model_len=4096)
     
     sampling_params = SamplingParams(
         temperature=args.temperature,
         top_p=args.top_p,
-        min_tokens=args.min_tokens,
         max_tokens=args.max_tokens,
         stop=["\n", "Question:"], 
         include_stop_str_in_output=False

@@ -177,3 +177,45 @@ def sft_microbatch_train_step(
 
     metadata = {}  # add more metadata
     return scaled_loss, metadata
+
+
+def compute_validation_loss(
+    model: PreTrainedModel,
+    val_loader,
+    device: str,
+) -> tuple[float, float]:
+    """
+    Compute average validation loss and perplexity over a validation dataset.
+    
+    Args:
+        model: PreTrainedModel HuggingFace model to evaluate.
+        val_loader: DataLoader yielding batches with 'input_ids' and 'labels' keys.
+        device: Device string (e.g., 'cuda:0') to move tensors to.
+    
+    Returns:
+        tuple[float, float]: (average_loss, perplexity)
+    """
+    from tqdm import tqdm
+    
+    model.eval()
+    total_loss = 0.0
+    total_tokens = 0
+    
+    with torch.no_grad():
+        for batch in tqdm(val_loader, desc="Validation"):
+            input_ids = batch['input_ids'].to(device)
+            labels = batch['labels'].to(device)
+            
+            # Forward pass using HuggingFace's built-in loss computation
+            outputs = model(input_ids=input_ids, labels=labels)
+            loss = outputs.loss
+            
+            # Accumulate loss weighted by number of tokens
+            batch_tokens = input_ids.numel()
+            total_loss += loss.item() * batch_tokens
+            total_tokens += batch_tokens
+    
+    avg_loss = total_loss / total_tokens if total_tokens > 0 else 0.0
+    perplexity = torch.exp(torch.tensor(avg_loss)).item()
+    
+    return avg_loss, perplexity

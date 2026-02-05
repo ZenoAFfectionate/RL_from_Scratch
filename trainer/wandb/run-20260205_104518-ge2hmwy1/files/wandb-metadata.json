@@ -1,0 +1,50 @@
+{
+  "os":  "Linux-6.8.0-90-generic-x86_64-with-glibc2.35",
+  "python":  "CPython 3.12.9",
+  "startedAt":  "2026-02-05T02:45:18.615274Z",
+  "program":  "/home/kemove/Courses/STF_LLM/Assignment_5/trainer/sft4chat_trainer.py",
+  "codePath":  "sft4chat_trainer.py",
+  "codePathLocal":  "sft4chat_trainer.py",
+  "email":  "2300742382@qq.com",
+  "root":  "/home/kemove/Courses/STF_LLM/Assignment_5/trainer",
+  "host":  "kemove-desktop",
+  "executable":  "/home/kemove/.conda/envs/llm/bin/python",
+  "cpu_count":  40,
+  "cpu_count_logical":  80,
+  "gpu":  "NVIDIA GeForce RTX 4090 D",
+  "gpu_count":  3,
+  "disk":  {
+    "/":  {
+      "total":  "1967317549056",
+      "used":  "1439981813760"
+    }
+  },
+  "memory":  {
+    "total":  "201325084672"
+  },
+  "gpu_nvidia":  [
+    {
+      "name":  "NVIDIA GeForce RTX 4090 D",
+      "memoryTotal":  "51527024640",
+      "cudaCores":  14592,
+      "architecture":  "Ada",
+      "uuid":  "GPU-094ffb3e-e03b-7fa7-7d9b-4789ae115165"
+    },
+    {
+      "name":  "NVIDIA GeForce RTX 4090 D",
+      "memoryTotal":  "51527024640",
+      "cudaCores":  14592,
+      "architecture":  "Ada",
+      "uuid":  "GPU-6be1403b-e613-a09e-2b9a-a90512452f2b"
+    },
+    {
+      "name":  "NVIDIA GeForce RTX 4090 D",
+      "memoryTotal":  "51527024640",
+      "cudaCores":  14592,
+      "architecture":  "Ada",
+      "uuid":  "GPU-3a037af5-aca9-0738-0bf0-c279f6b5910d"
+    }
+  ],
+  "cudaVersion":  "13.0",
+  "writerId":  "xbb8ict3wu5kvify9wp3xthpxfwok4jd"
+}

@@ -60,7 +60,7 @@ if __name__ == "__main__":
     ground_truth_answers = [example["solution"] for example in dataset]
 
     # load vLLM model and create a sampling params object
-    vllm_model = LLM(model=args.model_name, trust_remote_code=True)
+    vllm_model = LLM(model=args.model_name, trust_remote_code=True, max_model_len=4096)
     sampling_params = SamplingParams(
         temperature=args.temperature,
         top_p=args.top_p,
