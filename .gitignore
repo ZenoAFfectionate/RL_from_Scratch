@@ -173,3 +173,8 @@ results/
 checkpoints/
 
 tests/fixtures/
+
+wandb/
+trainer/wandb/
+
+scripts/
