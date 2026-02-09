@@ -8,8 +8,10 @@ from torch import Tensor
 from torch.utils.data import Dataset
 from transformers import PreTrainedTokenizerBase
 
-from algorithms.sft  import *
+from algorithms.sft import *
 from algorithms.grpo import *
+from algorithms.dpo import dpo_loss
+
 
 def run_tokenize_prompt_and_output(
     prompt_strs: list[str],
@@ -241,7 +243,7 @@ def run_compute_policy_gradient_loss(
         cliprange,
     )
 
-    
+
 def run_grpo_microbatch_train_step(
     policy_log_probs: torch.Tensor,
     response_mask: torch.Tensor,
@@ -306,13 +308,13 @@ def run_masked_mean(tensor: torch.Tensor, mask: torch.Tensor, dim: int | None = 
         torch.Tensor, the mean of the tensor along the specified
             dimension, considering only the elements with mask value 1.
     """
-    return masked_mean(tensor, mask, dim)
-
-
+    # masked_mean is now a method of GRPO_Trainer; instantiate minimally to access it
+    trainer = object.__new__(GRPO_Trainer)
+    return trainer.masked_mean(tensor, mask, dim)
 
 
 # ===============================================
-# The below adapters are used in the optional 
+# The below adapters are used in the optional
 # RLHF / safety part of the Alignment assignment.
 # ===============================================
 
@@ -445,4 +447,16 @@ def run_compute_per_instance_dpo_loss(
     Returns:
         torch.Tensor with the DPO loss for this example.
     """
-    raise NotImplementedError
+    # Use a simple "{instruction}{response}" template for the test
+    # (prompt is directly concatenated with response)
+    template = "{instruction}{response}"
+    return dpo_loss(
+        policy_model=lm,
+        reference_model=lm_ref,
+        tokenizer=tokenizer,
+        instruction=prompt,
+        chosen_response=response_chosen,
+        rejected_response=response_rejected,
+        template=template,
+        beta=beta,
+    )

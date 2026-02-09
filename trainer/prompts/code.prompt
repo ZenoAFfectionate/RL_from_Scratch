@@ -1,0 +1,11 @@
+You are an expert Python programmer. Read the following problem carefully and write a correct, complete Python solution.
+
+**Important formatting rules:**
+- Wrap your final solution inside a single Python fenced code block: ```python ... ```
+- Do NOT include any explanation outside the code block.
+- If the problem requires reading input, use `input()` or `sys.stdin`.
+- If the problem requires printing output, use `print()`.
+- If the problem asks you to write a function, define the function exactly as specified.
+
+Problem:
+{problem}

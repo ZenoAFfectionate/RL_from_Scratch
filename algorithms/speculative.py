@@ -1,7 +1,7 @@
 import time
-import numpy as np
 import threading
 import uuid
+from collections import deque
 from enum import Enum
 from dataclasses import dataclass, field
 from typing import List, Tuple, Dict, Optional, Callable, Any
@@ -49,10 +49,17 @@ class SequenceState:
     # Optional completion callback
     on_complete: Optional[Callable[['SequenceState'], None]] = None
     
+    # Cached full input_ids (prompt + generated), avoids repeated concatenation
+    _cached_input_ids: List[int] = field(default_factory=list, init=False, repr=False)
+    
+    def __post_init__(self):
+        """Initialize the cached input_ids from prompt tokens."""
+        self._cached_input_ids = list(self.prompt_token_ids)
+    
     @property
     def current_input_ids(self) -> List[int]:
-        """Get complete input_ids (prompt + generated)."""
-        return self.prompt_token_ids + self.generated_token_ids
+        """Get complete input_ids (prompt + generated). Returns cached list."""
+        return self._cached_input_ids
     
     @property
     def num_generated(self) -> int:
@@ -96,6 +103,7 @@ class SequenceState:
             eos_token_id: EOS token ID.
         """
         self.generated_token_ids.extend(accepted_tokens)
+        self._cached_input_ids.extend(accepted_tokens)  # Keep cache in sync
         self.total_draft_proposed += n_proposed
         self.total_draft_accepted += n_accepted
         self.draft_token_ids = []
@@ -216,24 +224,25 @@ class ContinuousBatchScheduler:
     
     def get_result(self, request_id: str) -> Optional[Dict[str, Any]]:
         """Get request result."""
-        if request_id in self.completed_sequences:
-            seq = self.completed_sequences[request_id]
-            return seq.get_result(self.decoder.target_tokenizer)
+        with self._lock:
+            if request_id in self.completed_sequences:
+                seq = self.completed_sequences[request_id]
+                return seq.get_result(self.decoder.target_tokenizer)
         return None
     
     def _merge_pending_requests(self):
         """Merge pending requests into the active batch."""
-        available_slots = self.max_batch_size - len(self.active_sequences)
-        
-        while available_slots > 0:
-            try:
-                seq_state = self.pending_queue.get_nowait()
-                seq_state.mark_running()
-                with self._lock:
+        with self._lock:
+            available_slots = self.max_batch_size - len(self.active_sequences)
+            
+            while available_slots > 0:
+                try:
+                    seq_state = self.pending_queue.get_nowait()
+                    seq_state.mark_running()
                     self.active_sequences[seq_state.request_id] = seq_state
-                available_slots -= 1
-            except Empty:
-                break
+                    available_slots -= 1
+                except Empty:
+                    break
     
     def _remove_finished_sequences(self) -> List[SequenceState]:
         """Remove finished sequences and return them."""
@@ -319,8 +328,7 @@ class ContinuousBatchScheduler:
             finished = False
             
             for draft_token, target_pred in zip(draft_tokens, target_predictions):
-                if target_pred is None:
-                    continue
+                if target_pred is None: break
                 
                 if target_pred == draft_token:
                     accepted_tokens.append(draft_token)
@@ -354,34 +362,36 @@ class ContinuousBatchScheduler:
         # 1. Merge pending requests into active batch
         self._merge_pending_requests()
         
-        if not self.active_sequences:
-            return 0, []
-        
-        # 2. Get all active sequences
+        # 2. Get snapshot of active sequences under lock
         with self._lock:
+            if not self.active_sequences:
+                return 0, []
             active_seqs = list(self.active_sequences.values())
         
-        # 3. Batch generate draft tokens
+        # 3. Batch generate draft tokens (expensive, no lock held)
         self._batch_generate_draft_tokens(active_seqs)
         
-        # 4. Batch verify
+        # 4. Batch verify (expensive, no lock held)
         verify_results = self._batch_verify_tokens(active_seqs)
         
-        # 5. Update sequence states
-        for seq in active_seqs:
-            if seq.request_id in verify_results:
-                accepted_tokens, n_accepted, _ = verify_results[seq.request_id]
-                seq.update_with_accepted_tokens(
-                    accepted_tokens, n_accepted, len(seq.draft_token_ids),
-                    self.decoder.target_eos_id
-                )
+        # 5. Update sequence states under lock
+        with self._lock:
+            for seq in active_seqs:
+                if seq.request_id in verify_results:
+                    accepted_tokens, n_accepted, _ = verify_results[seq.request_id]
+                    seq.update_with_accepted_tokens(
+                        accepted_tokens, n_accepted, len(seq.draft_token_ids),
+                        self.decoder.target_eos_id
+                    )
         
         # 6. Remove finished sequences
         finished = self._remove_finished_sequences()
         
-        self.total_iterations += 1
+        with self._lock:
+            self.total_iterations += 1
+            active_count = len(self.active_sequences)
         
-        return len(self.active_sequences), finished
+        return active_count, finished
     
     def run_until_complete(self, prompts: List[str], max_tokens: int = 256,
                            verbose: bool = True) -> List[Dict[str, Any]]:
@@ -407,13 +417,19 @@ class ContinuousBatchScheduler:
             print(f"Added {len(prompts)} requests to batch")
         
         iteration = 0
-        while self.active_sequences or not self.pending_queue.empty():
+        while True:
+            with self._lock:
+                has_work = bool(self.active_sequences) or not self.pending_queue.empty()
+            if not has_work:
+                break
             active_count, finished = self.step()
             iteration += 1
             
             if verbose and iteration % 10 == 0:
+                with self._lock:
+                    completed_count = len(self.completed_sequences)
                 print(f"Iteration {iteration}: {active_count} active, "
-                      f"{len(self.completed_sequences)} completed")
+                      f"{completed_count} completed")
         
         elapsed = time.time() - start_time
         
@@ -421,7 +437,8 @@ class ContinuousBatchScheduler:
         
         if verbose:
             total_tokens = sum(r["num_generated_tokens"] for r in results if r)
-            avg_acc_rate = np.mean([r["acceptance_rate"] for r in results if r])
+            acc_rates = [r["acceptance_rate"] for r in results if r]
+            avg_acc_rate = sum(acc_rates) / len(acc_rates) if acc_rates else 0.0
             print(f"\n=== Continuous Batching Complete ===")
             print(f"Total sequences: {len(prompts)}")
             print(f"Total iterations: {iteration}")
@@ -449,20 +466,23 @@ class ContinuousBatchScheduler:
     def _background_loop(self):
         """Background processing loop."""
         while self._running:
-            if self.active_sequences or not self.pending_queue.empty():
+            with self._lock:
+                has_work = bool(self.active_sequences) or not self.pending_queue.empty()
+            if has_work:
                 self.step()
             else:
                 time.sleep(0.01)  # Avoid busy waiting
     
     def get_stats(self) -> Dict[str, Any]:
         """Get scheduler statistics."""
-        return {
-            "active_sequences": len(self.active_sequences),
-            "pending_requests": self.pending_queue.qsize(),
-            "completed_sequences": len(self.completed_sequences),
-            "total_iterations": self.total_iterations,
-            "total_sequences_processed": self.total_sequences_processed
-        }
+        with self._lock:
+            return {
+                "active_sequences": len(self.active_sequences),
+                "pending_requests": self.pending_queue.qsize(),
+                "completed_sequences": len(self.completed_sequences),
+                "total_iterations": self.total_iterations,
+                "total_sequences_processed": self.total_sequences_processed
+            }
 
 
 class SpeculativeDecoder:
@@ -470,18 +490,7 @@ class SpeculativeDecoder:
 
     def __init__(self, target_model_name: str, draft_model_name: str, max_tokens: int = 4096,
                  adaptive_k: bool = True, min_k: int = 4, max_k: int = 32, initial_k: int = 16):
-        """
-        Initialize the speculative decoder with target and draft models.
-
-        Args:
-            target_model_name: HuggingFace model ID for the larger target model.
-            draft_model_name:  HuggingFace model ID for the smaller draft model.
-            max_tokens: Maximum model context length.
-            adaptive_k: Whether to use adaptive speculation length.
-            min_k: Minimum speculation length.
-            max_k: Maximum speculation length.
-            initial_k: Initial speculation length.
-        """
+        """Initialize the speculative decoder with target and draft models."""
         print(f"Loading Target Engine: {target_model_name}")
         self.target_llm = LLM(
             model=target_model_name,
@@ -521,8 +530,8 @@ class SpeculativeDecoder:
         self.min_k = min_k
         self.max_k = max_k
         self.current_k = initial_k
-        self.acceptance_history = []
         self._acceptance_window_size = 10
+        self.acceptance_history: deque = deque(maxlen=self._acceptance_window_size)
 
         # Async pipeline executor for parallel execution
         self._executor = ThreadPoolExecutor(max_workers=2)
@@ -552,8 +561,8 @@ class SpeculativeDecoder:
         rate = n_accepted / n_proposed
         self.acceptance_history.append(rate)
 
-        window = self.acceptance_history[-self._acceptance_window_size:]
-        avg_rate = sum(window) / len(window)
+        # deque is already bounded by maxlen, no slicing needed
+        avg_rate = sum(self.acceptance_history) / len(self.acceptance_history)
 
         if avg_rate > 0.8 and self.current_k < self.max_k:
             self.current_k = min(self.current_k + 2, self.max_k)
@@ -578,9 +587,9 @@ class SpeculativeDecoder:
             stop_token_ids=[self.target_eos_id]
         )
 
-        # generate draft tokens in one forward pass
+        # generate draft tokens in one forward pass (wrap as batch of 1 for API consistency)
         output = self.draft_llm.generate(
-            prompt_token_ids=input_ids,
+            prompt_token_ids=[input_ids],
             sampling_params=sampling_params,
             use_tqdm=False
         )
@@ -588,11 +597,14 @@ class SpeculativeDecoder:
         return list(output[0].outputs[0].token_ids)
     
     def generate_draft_tree(self, input_ids: List[int], depth: int = 4, width: int = 2):
-        """Generate tree-structured candidate tokens."""
-        from collections import deque
-
-        tree = []
-        queue = deque([(input_ids, 0, [])])  # (current_ids, depth, path)
+        """
+        Generate tree-structured candidate tokens using batched BFS.
+        
+        All nodes at the same depth level are batched into a single LLM call,
+        reducing the number of forward passes from O(width^depth) to O(depth).
+        """
+        max_paths = width ** depth
+        tree: List[List[int]] = []
 
         sampling_params = SamplingParams(
             temperature=0.7,  # need some randomness
@@ -602,26 +614,42 @@ class SpeculativeDecoder:
             detokenize=False
         )
 
-        # BFS to generate tree paths
-        while queue and len(tree) < width ** depth:
-            current_ids, d, path = queue.popleft()
-            if d >= depth:
-                tree.append(path)
-                continue
+        # Level-wise BFS: each element is (current_ids, path)
+        current_level = [(input_ids, [])]
 
-            output = self.draft_llm.generate(
-                prompt_token_ids=current_ids,
+        for d in range(depth):
+            if not current_level or len(tree) >= max_paths:
+                break
+
+            # Batch all nodes at this depth into a single LLM call
+            all_input_ids = [ids for ids, _path in current_level]
+
+            outputs = self.draft_llm.generate(
+                prompt_token_ids=all_input_ids,
                 sampling_params=sampling_params,
                 use_tqdm=False
             )
 
-            # get top-k candidates
-            logprobs = output[0].outputs[0].logprobs[0]
-            top_tokens = sorted(logprobs.keys(), key=lambda x: logprobs[x].logprob, reverse=True)[:width]
+            next_level = []
+            for (current_ids, path), output in zip(current_level, outputs):
+                logprobs = output.outputs[0].logprobs[0]
+                top_tokens = sorted(
+                    logprobs.keys(),
+                    key=lambda x: logprobs[x].logprob,
+                    reverse=True
+                )[:width]
 
-            for token in top_tokens:
-                new_path = path + [token]
-                queue.append((current_ids + [token], d + 1, new_path))
+                for token in top_tokens:
+                    new_path = path + [token]
+                    if d + 1 >= depth:
+                        tree.append(new_path)
+                    else:
+                        next_level.append((current_ids + [token], new_path))
+
+                    if len(tree) >= max_paths:
+                        return tree
+
+            current_level = next_level
 
         return tree
 
@@ -640,9 +668,9 @@ class SpeculativeDecoder:
         """
         candidate_ids = input_ids + draft_tokens
 
-        # generate target predictions in one pass
+        # generate target predictions in one pass (wrap as batch of 1 for API consistency)
         output = self.target_llm.generate(
-            prompt_token_ids=candidate_ids,
+            prompt_token_ids=[candidate_ids],
             sampling_params=self.verify_sampling_params,
             use_tqdm=False
         )
@@ -664,9 +692,9 @@ class SpeculativeDecoder:
 
         # find first mismatch position
         for draft_token, target_pred in zip(draft_tokens, target_predictions):
-            # if target_pred is None, the token is not accepted
+            # if target_pred is None, stop — cannot verify this or later positions
             if target_pred is None:
-                continue
+                break
 
             if target_pred == draft_token:
                 accepted_tokens.append(draft_token)
@@ -710,7 +738,10 @@ class SpeculativeDecoder:
         use_adaptive = num_speculative_tokens is None and self.adaptive_k
         if use_adaptive:
             self.current_k = (self.min_k + self.max_k) // 2
-            self.acceptance_history = []
+            self.acceptance_history.clear()
+
+        # Helper to avoid repeated k computation (#3)
+        get_k = lambda: self.current_k if use_adaptive else (num_speculative_tokens or 16)
 
         total_draft_proposed = 0
         total_draft_accepted = 0
@@ -719,10 +750,8 @@ class SpeculativeDecoder:
 
         if use_async_pipeline:
             # ============ Async Pipeline Mode ============
-            k = self.current_k if use_adaptive else (num_speculative_tokens or 16)
-            
             # First round: synchronously generate initial draft tokens
-            draft_tokens = self.generate_draft_tokens(input_ids, k)
+            draft_tokens = self.generate_draft_tokens(input_ids, get_k())
             
             while len(input_ids) - initial_len < max_tokens and not finished:
                 actual_proposed = len(draft_tokens)
@@ -741,9 +770,8 @@ class SpeculativeDecoder:
                 )
                 optimistic_draft_future: Optional[Future] = None
                 if should_optimistic_draft:
-                    next_k = self.current_k if use_adaptive else (num_speculative_tokens or 16)
                     optimistic_draft_future = self._executor.submit(
-                        self.generate_draft_tokens, optimistic_input_ids, next_k
+                        self.generate_draft_tokens, optimistic_input_ids, get_k()
                     )
                 
                 # Wait for verify result
@@ -751,15 +779,17 @@ class SpeculativeDecoder:
                 
                 total_draft_proposed += actual_proposed
                 total_draft_accepted += n_accepted
-                input_ids = input_ids + valid_tokens
+                input_ids.extend(valid_tokens)  # In-place extend avoids O(n) reallocation
                 
                 if use_adaptive:
                     self._update_speculation_length(n_accepted, actual_proposed)
                 
                 if finished:
-                    # Cancel optimistic draft if still running
+                    # Future.cancel() only prevents pending tasks from starting.
+                    # If already running, wait for completion to avoid GPU resource contention.
                     if optimistic_draft_future is not None:
-                        optimistic_draft_future.cancel()
+                        if not optimistic_draft_future.cancel():
+                            optimistic_draft_future.result()  # Wait and discard
                     break
                 
                 # Decide whether to use optimistic draft result
@@ -768,20 +798,18 @@ class SpeculativeDecoder:
                         # All accepted: optimistic assumption succeeded, use pre-generated draft
                         draft_tokens = optimistic_draft_future.result()
                     else:
-                        # Partial acceptance: optimistic assumption failed, cancel and regenerate
-                        optimistic_draft_future.cancel()
-                        k = self.current_k if use_adaptive else (num_speculative_tokens or 16)
-                        draft_tokens = self.generate_draft_tokens(input_ids, k)
+                        # Partial acceptance: optimistic assumption failed
+                        # Wait for running future to finish before issuing new draft generation
+                        if not optimistic_draft_future.cancel():
+                            optimistic_draft_future.result()  # Wait and discard
+                        draft_tokens = self.generate_draft_tokens(input_ids, get_k())
                 else:
                     # No optimistic draft, generate synchronously
-                    k = self.current_k if use_adaptive else (num_speculative_tokens or 16)
-                    draft_tokens = self.generate_draft_tokens(input_ids, k)
+                    draft_tokens = self.generate_draft_tokens(input_ids, get_k())
         else:
             while len(input_ids) - initial_len < max_tokens and not finished:
-                k = self.current_k if use_adaptive else (num_speculative_tokens or 16)
-
                 # generate candidate tokens from draft model
-                draft_tokens = self.generate_draft_tokens(input_ids, k)
+                draft_tokens = self.generate_draft_tokens(input_ids, get_k())
                 actual_proposed = len(draft_tokens)
 
                 # verify all draft tokens in one forward pass using target model
@@ -789,7 +817,7 @@ class SpeculativeDecoder:
 
                 total_draft_proposed += actual_proposed
                 total_draft_accepted += n_accepted
-                input_ids = input_ids + valid_tokens
+                input_ids.extend(valid_tokens)  # In-place extend avoids O(n) reallocation
 
                 if use_adaptive:
                     self._update_speculation_length(n_accepted, actual_proposed)
@@ -819,6 +847,9 @@ class SpeculativeDecoder:
             "baseline": {"times": [], "tokens_per_second": []} if compare_baseline else None
         }
 
+        # Pre-compute prompt token count for accurate metric calculation
+        prompt_token_count = len(self.target_tokenizer.encode(prompt))
+
         # benchmark speculative decoding
         for i in range(num_runs):
             mode_str = "Async" if use_async_pipeline else "Sync"
@@ -831,8 +862,8 @@ class SpeculativeDecoder:
             )
             elapsed = time.time() - start_time
 
-            # output now contains only generated tokens (prompt excluded)
-            output_tokens = len(self.target_tokenizer.encode(output))
+            # Subtract prompt tokens: speculative_decode returns full text (prompt + generated)
+            output_tokens = len(self.target_tokenizer.encode(output)) - prompt_token_count
             tps = output_tokens / elapsed
             results["speculative"]["times"].append(elapsed)
             results["speculative"]["tokens_per_second"].append(tps)

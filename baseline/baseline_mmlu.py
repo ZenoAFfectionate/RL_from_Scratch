@@ -13,29 +13,14 @@ from utils.rewards import mmlu_reward_fn
 from utils.vllm_helper import evaluate_vllm
 
 
-MMLU_USER_PROMPT_TEMPLATE="""
-Answer the following multiple choice question about {subject}. 
-Respond with a single sentence of the form "The correct answer is _", 
-filling the blank with the letter corresponding to the correct answer (i.e., A, B, C or D).
-
-Question: {question}
-A. {options[0]}
-B. {options[1]}
-C. {options[2]}
-D. {options[3]}
-Answer:
-"""
-
-
-def format_mmlu_prompt(example):
+def format_mmlu_prompt(example, prompt_template):
     """
     Constructs the prompt using ONLY the user template.
     """
     question = example["question"]
-    subject = example.get("subject", "general knowledge") 
-    options = example["choices"] 
-    # fill in user prompt template
-    full_prompt = MMLU_USER_PROMPT_TEMPLATE.format(
+    subject = example.get("subject", "general knowledge")
+    options = example["choices"]
+    full_prompt = prompt_template.format(
         subject=subject,
         question=question,
         options=options
@@ -56,7 +41,7 @@ if __name__ == "__main__":
 
     parser.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature.")
     parser.add_argument("--top_p", type=float, default=1.0, help="Top-p sampling.")
-    parser.add_argument("--max_tokens", type=int, default=256, help="Maximum number of tokens to generate.")
+    parser.add_argument("--max_tokens", type=int, default=256, help="Max tokens to generate.")
 
     args = parser.parse_args()
 
@@ -67,15 +52,21 @@ if __name__ == "__main__":
     print(f"  - Top-p: {args.top_p}")
 
 
+    # load prompt template
+    print(f"Loading prompt template ...", end=' ')
+    with open(f"../trainer/prompts/{args.dataset_name}.prompt", "r") as f:
+        prompt_template = f.read()
+    print("Success!\nLoaded prompt template.")
+
     # loading validation dataset
-    dataset = []  
+    dataset = []
     print(f"Loading validation set ...", end=' ')
     with open(f"../data/{args.dataset_name}/valid.jsonl", "r") as f:
         for line in f: dataset.append(json.loads(line))
     print(f"Success!\nLoaded {len(dataset)} examples.")
 
     # create prompts and extract ground truth from dataset
-    prompts = [format_mmlu_prompt(example) for example in dataset]
+    prompts = [format_mmlu_prompt(example, prompt_template) for example in dataset]
     ground_truth = [index_to_letter(e["answer"]) for e in dataset]
 
     # initialize model by means of vLLM

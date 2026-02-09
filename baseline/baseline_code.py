@@ -8,29 +8,29 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
 sys.path.append(project_root)
 
-from utils.rewards import r1_zero_reward_fn
+from utils.rewards import code_reward_fn
 from utils.vllm_helper import evaluate_vllm
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Evaluate a VLLM model on a specified dataset.")
-    
+    parser = argparse.ArgumentParser(
+        description="Evaluate a VLLM model on a code-generation dataset.")
+
     parser.add_argument(
         "--model_name",
         type=str,
-        default="Qwen/Qwen2.5-Math-1.5B",
-        help="The name or path of the model to use from Hugging Face Hub."
+        default="Qwen/Qwen2.5-Coder-1.5B",
+        help="The name or path of the model to use."
     )
     parser.add_argument(
         "--dataset_name",
         type=str,
-        default="math",
+        default="code",
         help="The dataset to evaluate on."
     )
-    
     parser.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature.")
     parser.add_argument("--top_p", type=float, default=1.0, help="Top-p (nucleus) sampling.")
-    parser.add_argument("--max_tokens", type=int, default=4096, help="Maximum number of tokens to generate.")
+    parser.add_argument("--max_tokens", type=int, default=4096, help="Max tokens to generate.")
 
     args = parser.parse_args()
 
@@ -41,37 +41,46 @@ if __name__ == "__main__":
     print(f"  - Temperature: {args.temperature}")
     print(f"  - Max Tokens: {args.max_tokens}\n")
 
-    # load dataset and prompt template
+    # load prompt template
     print(f"Loading prompt template ...", end=' ')
     with open(f"../trainer/prompts/{args.dataset_name}.prompt", "r") as f:
         prompt_template = f.read()
     print("Success!\nLoaded prompt template.")
 
+    # load dataset
     dataset = []
     print(f"Loading validation set ...", end=' ')
     with open(f"../data/{args.dataset_name}/train.jsonl", "r") as f:
         for line in f: dataset.append(json.loads(line))
     print(f"Success!\nLoaded {len(dataset)} examples.")
 
-    # format each example into a string prompt and extract the answer
-    prompts = [prompt_template.format(question=example["problem"]) for example in dataset]
-    ground_truth_answers = [example["solution"] for example in dataset]
+    # format prompts and normalize ground-truth test cases
+    prompts = [
+        prompt_template.format(problem=example["problem"])
+        for example in dataset
+    ]
+    ground_truth_tests = [example["test"] for example in dataset]
 
-    # load vLLM model and create a sampling params object
-    vllm_model = LLM(model=args.model_name, trust_remote_code=True, max_model_len=4096)
+    # load vLLM model
+    vllm_model = LLM(
+        model=args.model_name,
+        trust_remote_code=True,
+        max_model_len=4096,
+    )
     sampling_params = SamplingParams(
         temperature=args.temperature,
         top_p=args.top_p,
         max_tokens=args.max_tokens,
-        stop=["</answer>"],
-        include_stop_str_in_output=True
+        stop=["```"],
+        include_stop_str_in_output=True,
     )
-
+    
+    # perform zero-shot evaluation on model
     evaluate_vllm(
         vllm_model=vllm_model,
-        reward_fn=r1_zero_reward_fn,
+        reward_fn=code_reward_fn,
         prompts=prompts,
-        answers=ground_truth_answers,
+        answers=ground_truth_tests,
         eval_sampling_params=sampling_params,
-        output_filepath=f"./results/baseline_math.jsonl"
+        output_filepath=f"../results/baseline_code.jsonl",
     )

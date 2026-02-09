@@ -1,6 +1,7 @@
 import re
 
 from .math_utils import extract_answer, grade
+from .code_utils import evaluate_code_response
 
 
 def mmlu_reward_fn(response: str, ground_truth: str) -> dict:
@@ -88,8 +89,20 @@ def question_only_reward_fn(response, ground_truth, fast=True):
         }
 
 
-def r1_zero_reward_fn(response, ground_truth, fast=True):
-    """Reward function for R1-zero like evaluation."""
+def dsr1_reward_fn(response, ground_truth, fast=True):
+    """
+    Reward function for R1-zero like math evaluation.
+
+    Evaluates a model-generated response by:
+      1. Checking format — response must contain <think>...</think><answer>...</answer> tags.
+      2. Extracting the answer from within <answer> tags (handles \\boxed{} notation).
+      3. Grading the extracted answer against ground_truth (supports str or list of str).
+
+    Reward structure:
+      - format_reward:  1.0 if response follows the expected format, 0.0 otherwise.
+      - answer_reward:  1.0 if the extracted answer matches ground_truth, 0.0 otherwise.
+      - reward:         1.0 only when both formatted AND correct, 0.0 otherwise.
+    """
     if re.search(r"</think>\s*<answer>", response) and "</answer>" in response:
         model_answer = response.split("<answer>")[-1].replace("</answer>", "")
         # 
@@ -133,3 +146,34 @@ def r1_zero_reward_fn(response, ground_truth, fast=True):
             "answer_reward": 0.0,
             "reward": 0.0
         }
+
+
+def code_reward_fn(response, ground_truth, timeout=10.0, test_type=None):
+    """
+    Reward function for verifiable code generation tasks.
+
+    Evaluates a model-generated code response by:
+      1. Extracting code from the response (handles markdown, XML tags, raw).
+      2. Checking syntax — a compilable solution earns format_reward = 1.0.
+      3. Running extracted code against provided test cases —
+         passing ALL tests earns answer_reward = 1.0.
+
+    Reward structure (mirrors r1_zero_reward_fn):
+      - format_reward:  1.0 if code compiles,       0.0 otherwise.
+      - answer_reward:  1.0 if all tests pass,      0.0 otherwise.
+      - partial_reward: fraction of tests passed (for softer shaping).
+      - reward:         1.0 only when ALL tests pass, 0.0 otherwise.
+    """
+    result = evaluate_code_response(
+        response=response,
+        test_cases=ground_truth,
+        timeout=timeout,
+        test_type=test_type,
+    )
+    
+    return {
+        "format_reward":  result["format_reward"],
+        "answer_reward":  result["answer_reward"],
+        "partial_reward": result["partial_reward"],
+        "reward":         result["reward"],
+    }

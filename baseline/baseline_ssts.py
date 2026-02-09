@@ -41,7 +41,6 @@ if __name__ == "__main__":
         temperature=args.temperature,
         top_p=args.top_p,
         max_tokens=args.max_tokens,
-        # do not want strict stop tokens
     )
 
     print("Generating outputs...")
