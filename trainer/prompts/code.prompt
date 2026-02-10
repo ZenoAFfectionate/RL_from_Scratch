@@ -1,4 +1,4 @@
-You are an expert Python programmer. Read the following problem carefully and write a correct, complete Python solution.
+A conversation between User and Assistant. The User asks a question, and the Assistant write a correct, complete Python solution.
 
 **Important formatting rules:**
 - Wrap your final solution inside a single Python fenced code block: ```python ... ```
@@ -7,5 +7,5 @@ You are an expert Python programmer. Read the following problem carefully and wr
 - If the problem requires printing output, use `print()`.
 - If the problem asks you to write a function, define the function exactly as specified.
 
-Problem:
-{problem}
+User: {problem}
+Assistant:
