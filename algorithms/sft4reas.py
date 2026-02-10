@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader
 from torch.nn.utils import clip_grad_norm_
 
 from utils.vllm_helper import *
-from algorithms.utils import tokenize_prompt_and_output
+from algorithms.utils import tokenize_prompt_and_output, pad_collate
 
 
 class SFT4ReasTrainer:
@@ -82,7 +82,8 @@ class SFT4ReasTrainer:
             """Tokenize math problem/solution pairs with response_mask."""
             prompts   = [self.prompt_template.format(problem=b['problem']) for b in batch]
             responses = [b['solution'] for b in batch]
-            return tokenize_prompt_and_output(prompts, responses, self.tokenizer)
+            samples = tokenize_prompt_and_output(prompts, responses, self.tokenizer)
+            return pad_collate(samples, self.tokenizer.pad_token_id)
         
         self._log("Initializing data loaders...")
         self.train_loader = DataLoader(
@@ -151,23 +152,16 @@ class SFT4ReasTrainer:
             reduction='none',
         ).view(labels.shape)                   # (batch_size, seq_len)
 
-        # perr-token NLL averaged over response tokens only
+        del logits  # free logits before backward to save memory
+
+        # per-token NLL averaged over response tokens only
         total_response_tokens = response_mask.sum().clamp(min=1)
         microbatch_loss = (per_token_loss * response_mask).sum() / total_response_tokens
 
         scaled_loss = microbatch_loss / self.gradient_accumulation_steps
         scaled_loss.backward()
 
-        # compute per-token entropy AFTER backward so autograd saved tensors are freed
-        with torch.no_grad():
-            log_probs = F.log_softmax(logits, dim=-1)
-            del logits
-            token_entropy = -(log_probs.exp() * log_probs).sum(dim=-1)
-            del log_probs
-            masked_entropy = (token_entropy * response_mask).sum() / total_response_tokens
-
-        metadata = {"entropy": masked_entropy.item()}
-        return scaled_loss, metadata
+        return scaled_loss, {}
 
 
     def validate(self):
@@ -199,14 +193,12 @@ class SFT4ReasTrainer:
 
             # accumulators for metrics across micro-batches in one optimizer step.
             accumulated_loss    = 0.0
-            accumulated_entropy = 0.0
             step_start_time     = time.time()
 
             for i, batch in enumerate(self.train_loader):
-                loss, metadata = self.train_step(batch)
+                loss, _ = self.train_step(batch)
 
                 accumulated_loss    += loss.item()
-                accumulated_entropy += metadata.get("entropy", 0.0)
 
                 # Optimizer step after accumulating enough micro-batches
                 if (i + 1) % self.gradient_accumulation_steps == 0:
@@ -219,14 +211,12 @@ class SFT4ReasTrainer:
                     step_elapsed = time.time() - step_start_time
 
                     # correctly averaged metrics over the accumulation window
-                    avg_entropy = accumulated_entropy / self.gradient_accumulation_steps
                     ppl = math.exp(min(accumulated_loss, 100))
                     current_lr = self.scheduler.get_last_lr()[0]
 
                     wandb.log({
                         "train/loss": accumulated_loss,
                         "train/ppl": ppl,
-                        "train/entropy": avg_entropy,
                         "train/lr": current_lr,
                         "train/step_time": step_elapsed,
                         "train_step": self.train_step_count,
@@ -236,7 +226,7 @@ class SFT4ReasTrainer:
                         self._log(
                             f"  [Train] Step {self.train_step_count}: "
                             f"loss={accumulated_loss:.4f}, ppl={ppl:.2f}, "
-                            f"entropy={avg_entropy:.4f}, lr={current_lr:.2e}, "
+                            f"lr={current_lr:.2e}, "
                             f"step_time={step_elapsed:.2f}s"
                         )
 
@@ -246,7 +236,6 @@ class SFT4ReasTrainer:
 
                     # Reset accumulators for next optimizer step
                     accumulated_loss    = 0.0
-                    accumulated_entropy = 0.0
                     step_start_time     = time.time()
 
         # Final validation before saving

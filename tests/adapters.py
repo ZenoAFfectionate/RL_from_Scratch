@@ -9,6 +9,7 @@ from torch.utils.data import Dataset
 from transformers import PreTrainedTokenizerBase
 
 from algorithms.sft import *
+from algorithms.utils import tokenize_prompt_and_output, pad_collate
 from algorithms.grpo import *
 from algorithms.dpo import dpo_loss
 
@@ -35,7 +36,10 @@ def run_tokenize_prompt_and_output(
             "response_mask": torch.Tensor of shape (batch_size, max(prompt_and_output_lens) - 1):
                 a mask on the response tokens in `labels`.
     """
-    return tokenize_prompt_and_output(prompt_strs, output_strs, tokenizer)
+    return pad_collate(
+        tokenize_prompt_and_output(prompt_strs, output_strs, tokenizer),
+        tokenizer.pad_token_id,
+    )
 
 
 def run_compute_entropy(logits: torch.Tensor) -> torch.Tensor:

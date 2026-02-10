@@ -759,13 +759,11 @@ def _strip_properly_formatted_commas(expr: str):
 
 def _normalize(expr: str) -> str:
     """Normalize answer expressions."""
-    if expr is None:
-        return None
+    if expr is None: return None
 
     # Remove enclosing `\text{}`.
     m = re.search("^\\\\text\{(?P<text>.+?)\}$", expr)
-    if m is not None:
-        expr = m.group("text")
+    if m is not None: expr = m.group("text")
 
     expr = expr.replace("\\%", "%")
     expr = expr.replace("\\$", "$")
@@ -1000,8 +998,13 @@ def extract_answer(passage: str) -> str:
 
 
 def grade(model_answer: str, gt_answer: str, fast: bool = True):
-    if "\\boxed" in gt_answer: gt_answer = extract_answer(gt_answer)
-    # 
+    # extract ground truth answer based on special tags
+    if "\\boxed" in gt_answer: 
+        gt_answer = extract_answer(gt_answer)
+    elif "<answer>" in gt_answer and "</answer>" in gt_answer:
+        gt_answer = gt_answer.split("<answer>")[-1].split("</answer>")[0]
+    
+    # judge the correctness of answer simply
     correct = grade_answer_mathd(model_answer, gt_answer) or \
               grade_answer_sympy(model_answer, gt_answer)
     
@@ -1013,112 +1016,3 @@ def grade(model_answer: str, gt_answer: str, fast: bool = True):
             gt_answer,
         )
     return correct
-
-
-import re
-def r1_zero_reward_fn(response, ground_truth, fast=True):
-    # We are strict about format to evaluate our models.
-    if re.search(r"</think>\s*<answer>", response) and "</answer>" in response:
-        model_answer = response.split("<answer>")[-1].replace("</answer>", "")
-        if "\\boxed" in model_answer:
-            model_answer = extract_answer(model_answer)
-            if model_answer is None:
-                return {
-                    "format_reward": 1.0,
-                    "answer_reward": 0.0,
-                    "reward": 0.0
-                }
-        if isinstance(ground_truth, float) or isinstance(ground_truth, int):
-            ground_truth = str(ground_truth)
-        if isinstance(ground_truth, str):
-            is_correct = grade(model_answer, ground_truth, fast)
-        elif isinstance(ground_truth, list):
-            is_correct = False
-            for gt in ground_truth:
-                is_correct |= grade(model_answer, gt, fast)
-        if is_correct:
-            return {
-                "format_reward": 1.0,
-                "answer_reward": 1.0,
-                "reward": 1.0
-            }
-        else:
-            # Formatted but wrong answer; no format reward to avoid hacking.
-            return {
-                "format_reward": 1.0,
-                "answer_reward": 0.0,
-                "reward": 0.0
-            }
-    else:
-        # Unformatted.
-        return {
-            "format_reward": 0.0,
-            "answer_reward": 0.0,
-            "reward": 0.0
-        }
-
-
-def question_only_reward_fn(response, ground_truth, fast=True):
-    model_answer = extract_answer(response)
-    if model_answer is None:
-        # Cannot even parse anything.
-        return {
-            "format_reward": 0.0,
-            "answer_reward": 0.0,
-            "reward": 0.0
-        }
-    if isinstance(ground_truth, float) or isinstance(ground_truth, int):
-        ground_truth = str(ground_truth)
-    if isinstance(ground_truth, str):
-        is_correct = grade(model_answer, ground_truth, fast)
-    elif isinstance(ground_truth, list):
-        is_correct = False
-        for gt in ground_truth:
-            is_correct |= grade(model_answer, gt, fast)
-    if is_correct:
-        # Correctness reward.
-        return {
-            "format_reward": 1.0,
-            "answer_reward": 1.0,
-            "reward": 1.0
-        }
-    else:
-        # Formatted but wrong answer; no format reward to avoid hacking.
-        return {
-            "format_reward": 1.0,
-            "answer_reward": 0.0,
-            "reward": 0.0
-        }
-
-
-import numpy as np
-def build_train_log_dict(
-    step_metrics: dict[str, list[float]],
-    reward_metadata: dict[str, float],
-    global_step: int,
-    grad_norm: float,
-    mean_advantage: float,
-    loss_type: str
-) -> dict[str, float]:
-    """
-    Constructs the logging dictionary for the current training step.
-    """
-    avg_loss = np.mean(step_metrics["loss"])
-    avg_entropy = np.mean(step_metrics["token_entropy"])
-    
-    log_dict = {
-        "step": global_step,
-        "train/loss": avg_loss,
-        "train/entropy": avg_entropy,
-        "train/grad_norm": grad_norm,
-        "train/mean_advantage": mean_advantage,
-    }
-
-    for key, val in reward_metadata.items():
-        log_dict[f"train/rewards/{key}"] = val
-
-    if loss_type == "grpo_clip":
-        avg_clip = np.mean(step_metrics["clip_fraction"]) if step_metrics.get("clip_fraction") else 0.0
-        log_dict["train/clip_fraction"] = avg_clip
-
-    return log_dict

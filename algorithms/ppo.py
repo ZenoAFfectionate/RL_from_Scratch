@@ -15,7 +15,7 @@ from torch.nn.utils import clip_grad_norm_
 
 from vllm import SamplingParams
 
-from Courses.STF_LLM.Assignment_5.algorithms.sft4reas import tokenize_prompt_and_output
+from algorithms.utils import tokenize_prompt_and_output, pad_collate
 from utils.vllm_helper import (
     load_policy_into_vllm_instance,
     evaluate_vllm,
@@ -380,9 +380,10 @@ class PPO_Trainer:
         raw_rewards = raw_rewards.to(device)
 
         # tokenize prompts and responses
-        tokenized = tokenize_prompt_and_output(
+        samples = tokenize_prompt_and_output(
             flat_prompts, flat_responses, self.tokenizer
         )
+        tokenized = pad_collate(samples, self.tokenizer.pad_token_id)
         input_ids = tokenized["input_ids"].to(device, non_blocking=True)
         labels = tokenized["labels"].to(device, non_blocking=True)
         response_mask = tokenized["response_mask"].to(device, non_blocking=True)

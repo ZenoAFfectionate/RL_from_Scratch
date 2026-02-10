@@ -74,7 +74,7 @@ if __name__ == "__main__":
     for param in reference_model.parameters():
         param.requires_grad = False
 
-    optimizer = AdamW(policy_model.parameters(), lr=args.lr, weight_decay=0.0, betas=(0.9, 0.95))
+    optimizer = AdamW(policy_model.parameters(), lr=args.lr, weight_decay=0.0, betas=(0.9, 0.95), fused=True)
 
     gradient_accumulation_steps = args.batch_size // args.micro_batch
     total_micro_batches = len(train_dataset) // args.micro_batch

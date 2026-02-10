@@ -81,7 +81,7 @@ if __name__ == "__main__":
         tokenizer.pad_token = tokenizer.eos_token
 
     print("Initializing optimizer and scheduler...")
-    optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=0.0, betas=(0.9, 0.95))
+    optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=0.0, betas=(0.9, 0.95), fused=True)
 
     grad_accum_steps = args.batch_size // args.micro_batch
     micro_batch_per_epoch = math.ceil(len(train_data) / args.micro_batch)
@@ -95,7 +95,7 @@ if __name__ == "__main__":
     print("Initializing validation model...")
     valid_model = init_vllm(args.model_id, args.valid_device, args.seed)
     valid_sampling_params = SamplingParams(
-        temperature=args.temperature,
+        temperature=0.0,
         top_p=args.top_p,
         max_tokens=args.max_tokens,
         stop=["</answer>", "</solution>"],

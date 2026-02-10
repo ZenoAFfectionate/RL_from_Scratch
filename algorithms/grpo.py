@@ -7,13 +7,12 @@ import numpy as np
 
 from datetime import datetime
 
-from torch.optim import AdamW
-from torch.utils.data import TensorDataset, DataLoader
+from torch.utils.data import DataLoader
 from torch.nn.utils import clip_grad_norm_
 
 from vllm import SamplingParams
 from utils.vllm_helper import load_policy_into_vllm_instance, evaluate_vllm
-from algorithms.utils import tokenize_prompt_and_output
+from algorithms.utils import tokenize_prompt_and_output, pad_collate, ListDataset
 
 
 class GRPO_Trainer:
@@ -171,8 +170,9 @@ class GRPO_Trainer:
 
         This method:
           1. Computes group-normalized rewards and per-sample advantages.
-          2. Tokenises prompt + response pairs and builds the response mask.
-          3. Pre-computes reference / old log-probs for GRPO-Clip or KL-penalty.
+          2. Tokenises prompt + response pairs (variable-length, no global padding).
+          3. Pre-computes reference / old log-probs in micro-batches,
+             padding only within each micro-batch.
         """
         # compute group-normalised rewards and advantages
         advantages, raw_rewards, reward_meta = \
@@ -180,55 +180,63 @@ class GRPO_Trainer:
                 rollout_responses=flat_responses,
                 repeated_ground_truths=ground_truths
             )
-        advantages = advantages.to(self.train_device)
 
-        # tokenize prompt and response pairs
-        tokenized = tokenize_prompt_and_output(flat_prompts, flat_responses, self.tokenizer)
-        input_ids = tokenized["input_ids"].to(self.train_device, non_blocking=True)
-        labels = tokenized["labels"].to(self.train_device, non_blocking=True)
-        response_mask = tokenized["response_mask"].to(self.train_device, non_blocking=True)
+        # tokenize — returns list of per-sample dicts with variable-length tensors
+        samples = tokenize_prompt_and_output(flat_prompts, flat_responses, self.tokenizer)
+        pad_id = self.tokenizer.pad_token_id
 
-        # pre-compute old log-probs (fused CE — avoids (B,T,V) materialization)
+        # pre-compute old log-probs in micro-batches (dynamic padding per chunk)
+        self.model.eval()
         with torch.no_grad():
-            self.model.eval()
-            attention_mask = (input_ids != self.tokenizer.pad_token_id).long()
-            logits = self.model(input_ids, attention_mask=attention_mask).logits
-            token_nll = F.cross_entropy(
-                logits.view(-1, logits.size(-1)),
-                labels.view(-1),
-                reduction="none",
-            ).view(labels.shape)
-            old_log_probs = -token_nll
+            for start in range(0, len(samples), self.micro_batch):
+                mb_samples = samples[start:start + self.micro_batch]
+                mb = pad_collate(mb_samples, pad_id)
+                mb_ids = mb["input_ids"].to(self.train_device)
+                mb_labels = mb["labels"].to(self.train_device)
+                mb_attn = (mb_ids != pad_id).long()
+
+                logits = self.model(mb_ids, attention_mask=mb_attn).logits
+                token_nll = F.cross_entropy(
+                    logits.view(-1, logits.size(-1)),
+                    mb_labels.view(-1),
+                    reduction="none",
+                ).view(mb_labels.shape)
+                old_lp_padded = -token_nll
+
+                # store unpadded old_log_probs back into each sample
+                for j, s in enumerate(mb_samples):
+                    seq_len = s["input_ids"].size(0)
+                    s["old_log_probs"] = old_lp_padded[j, :seq_len].cpu()
+
+                del logits, token_nll, old_lp_padded
+
+        # attach per-sample advantages
+        for i, s in enumerate(samples):
+            s["advantage"] = advantages[i]
 
         return {
-            "input_ids": input_ids,
-            "labels": labels,
-            "response_mask": response_mask,
+            "samples": samples,
             "advantages": advantages,
             "raw_rewards": raw_rewards,
-            "old_log_probs": old_log_probs,
             "reward_metadata": reward_meta,
         }
 
     def get_action_log_probs(self, input_ids, labels):
         """
         Forward pass through the policy model to obtain per-token
-        log-probabilities and per-token entropy.
-
-        Materializes the full (B, T, V) log-softmax because entropy
-        requires it. Used in train_step (not generate_experiences).
+        log-probabilities using fused cross-entropy (avoids materializing
+        the full (B, T, V) log-softmax tensor).
         """
         attention_mask = (input_ids != self.tokenizer.pad_token_id).long()
         logits = self.model(input_ids, attention_mask=attention_mask).logits
-        # full log-softmax for gather and entropy
-        log_probs = F.log_softmax(logits, dim=-1)
-        token_log_probs = torch.gather(
-            log_probs, dim=-1, index=labels.unsqueeze(-1)
-        ).squeeze(-1)
-        # compute token entropy
-        with torch.no_grad():
-            token_entropy = -torch.sum(log_probs.exp() * log_probs, dim=-1)
-        return {"log_probs": token_log_probs, "token_entropy": token_entropy}
+        # fused CE: computes log-softmax + gather internally, never
+        # allocates the full (B, T, V) tensor in Python
+        token_log_probs = -F.cross_entropy(
+            logits.view(-1, logits.size(-1)),
+            labels.view(-1),
+            reduction="none",
+        ).view(labels.shape)
+        return {"log_probs": token_log_probs}
 
 
     def compute_loss(self, policy_log_probs, response_mask,
@@ -271,26 +279,31 @@ class GRPO_Trainer:
         Execute one full training pass over a batch of experiences, including
         gradient accumulation and optimizer stepping.
         """
-        input_ids = experiences["input_ids"]
-        labels = experiences["labels"]
-        response_mask = experiences["response_mask"]
-        advantages = experiences["advantages"]
-        old_log_probs = experiences["old_log_probs"]
+        samples = experiences["samples"]
+        pad_id = self.tokenizer.pad_token_id
+        collate_fn = lambda batch: pad_collate(batch, pad_id)
 
-        dataset = TensorDataset(input_ids, labels, response_mask, advantages, old_log_probs)
-        loader = DataLoader(dataset, batch_size=self.micro_batch, shuffle=True)
+        dataset = ListDataset(samples)
+        loader = DataLoader(
+            dataset, batch_size=self.micro_batch, shuffle=True,
+            collate_fn=collate_fn, pin_memory=True,
+        )
 
-        step_metrics = {"loss": [], "token_entropy": [], "clip_fraction": [], "kl_mean": []}
+        step_metrics = {"loss": [], "clip_fraction": [], "kl_mean": []}
         accumu_count = 0
 
         self.model.train()
-        for epoch in range(self.rollout_epochs):
+        for _ in range(self.rollout_epochs):
             for batch in loader:
-                mb_ids, mb_labels, mb_mask, mb_adv, mb_old_lp = batch
+                mb_ids = batch["input_ids"].to(self.train_device, non_blocking=True)
+                mb_labels = batch["labels"].to(self.train_device, non_blocking=True)
+                mb_mask = batch["response_mask"].to(self.train_device, non_blocking=True)
+                mb_adv = batch["advantage"].to(self.train_device, non_blocking=True)
+                mb_old_lp = batch["old_log_probs"].to(self.train_device, non_blocking=True)
 
-                # forward pass:  compute per-token log-probs and entropy
+                # forward pass with fused CE (no full log-softmax)
                 model_out = self.get_action_log_probs(mb_ids, mb_labels)
-                # compute GRPO-Clip loss without backward pass
+                # compute GRPO-Clip loss
                 loss, meta = self.compute_loss(
                     policy_log_probs=model_out["log_probs"],
                     response_mask=mb_mask,
@@ -303,7 +316,6 @@ class GRPO_Trainer:
                 scaled_loss.backward()
 
                 step_metrics["loss"].append(loss.item())
-                step_metrics["token_entropy"].append(model_out["token_entropy"].mean().item())
                 step_metrics["clip_fraction"].append(meta["clip_fraction"].item())
                 step_metrics["kl_mean"].append(meta["kl_mean"].item())
 
@@ -337,7 +349,7 @@ class GRPO_Trainer:
         last_log_time = time.time()
         last_log_step = 0
 
-        for step in range(self.num_iterations):
+        for _ in range(self.num_iterations):
             # sample a batch of prompts
             indices = np.random.choice(len(self.train_dataset), self.batch_size, replace=False)
             batch_items = [self.train_dataset[i] for i in indices]
@@ -410,7 +422,6 @@ class GRPO_Trainer:
         log_dict = {
             "step":           self.global_step,
             "train/loss":     np.mean(step_metrics["loss"]),
-            "train/entropy":  np.mean(step_metrics["token_entropy"]),
             "train/clip_fra": np.mean(step_metrics["clip_fraction"]),
             "train/mean_adv": experiences["advantages"].mean().item(),
             "train/kl_mean":  np.mean(step_metrics["kl_mean"]) if step_metrics["kl_mean"] else 0,

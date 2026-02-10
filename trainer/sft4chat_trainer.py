@@ -97,7 +97,7 @@ if __name__ == "__main__":
 
     print("Initializing optimizer and scheduler...")
     optimizer = AdamW(model.parameters(), lr=args.lr,
-                      weight_decay=0.0, betas=(0.9, 0.95))
+                      weight_decay=0.0, betas=(0.9, 0.95), fused=True)
 
     grad_accum_steps = args.batch_size // args.micro_batch
     micro_batch_per_epoch = len(train_dataset) // args.micro_batch

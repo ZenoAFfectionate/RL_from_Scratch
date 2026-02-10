@@ -1,5 +1,7 @@
 import torch
+import torch.nn.functional as F
 from typing import List, Dict
+from torch.utils.data import Dataset
 
 
 def tokenize_prompt_and_output(
@@ -7,56 +9,68 @@ def tokenize_prompt_and_output(
     output_strs: List[str],
     tokenizer,
     max_seq_len: int = 2048,
-) -> Dict[str, torch.Tensor]:
+) -> List[Dict[str, torch.Tensor]]:
     """
-    Tokenize the prompt and output strings, and construct a mask that is 1
-    for the response tokens and 0 for other tokens (prompt or padding).
+    Tokenize prompt+output pairs. Returns a list of per-sample dicts
+    with variable-length tensors (no global padding).
     """
-    # tokenize each prompt and output, then combine them
-    batch_ids, prompt_lens, output_lens = [], [], []
+    samples = []
     for prompt, output in zip(prompt_strs, output_strs):
-        # tokenize the prompt and output into ids
         prompt_ids = tokenizer(prompt, add_special_tokens=False).input_ids
         output_ids = tokenizer(output, add_special_tokens=False).input_ids
-        #
-        batch_ids.append(prompt_ids + output_ids + [tokenizer.eos_token_id])
-        prompt_lens.append(len(prompt_ids))
-        output_lens.append(len(output_ids))
 
-    # create input_ids and labels tensors, padding to the max length
-    # each seq has length (p_len + o_len + 1) for EOS; after shift,
-    # inputs/labels each have length (p_len + o_len), so pad to that.
-    target_len = max(p_len + o_len for p_len, o_len in zip(prompt_lens, output_lens))
-    # target_len = min(target_len, max_seq_len)
-    input_rows, label_rows = [], []
-    for seq in batch_ids:
-        inputs = seq[:-1]  # len: p_len + o_len
-        labels = seq[+1:]  # len: p_len + o_len
-        # truncate if too long (this is the most tricky part...)
-        inputs = inputs[:target_len]
-        labels = labels[:target_len]
+        full_ids = prompt_ids + output_ids + [tokenizer.eos_token_id]
+        input_ids = full_ids[:-1]
+        labels = full_ids[1:]
 
-        cur_len = len(inputs)
-        inputs = inputs + [tokenizer.pad_token_id] * (target_len - cur_len)
-        labels = labels + [tokenizer.pad_token_id] * (target_len - cur_len)
+        # truncate if needed
+        input_ids = input_ids[:max_seq_len]
+        labels = labels[:max_seq_len]
+        seq_len = len(input_ids)
 
-        input_rows.append(inputs)  #
-        label_rows.append(labels)  #
-
-    input_ids = torch.tensor(input_rows, dtype=torch.long)  #
-    labels = torch.tensor(label_rows, dtype=torch.long)  #
-
-    # create response mask
-    response_mask = torch.zeros_like(labels, dtype=torch.bool)
-    for i, (p_len, o_len, seq) in enumerate(zip(prompt_lens, output_lens, batch_ids)):
-        # first position where label is a response token
+        # build response mask
+        p_len = len(prompt_ids)
+        response_mask = torch.zeros(seq_len, dtype=torch.bool)
         start = max(p_len - 1, 0)
-        end = min(start + o_len + 1, target_len)  # +1 to include the EOS label
+        end = min(start + len(output_ids) + 1, seq_len)
         if end > start:
-            response_mask[i, start:end] = True
+            response_mask[start:end] = True
 
-    return {
-        "input_ids": input_ids,
-        "labels": labels,
-        "response_mask": response_mask,
+        samples.append({
+            "input_ids": torch.tensor(input_ids, dtype=torch.long),
+            "labels": torch.tensor(labels, dtype=torch.long),
+            "response_mask": response_mask,
+        })
+
+    return samples
+
+
+def pad_collate(samples, pad_token_id):
+    """Pad a list of variable-length sample dicts to the max length in the batch."""
+    max_len = max(s["input_ids"].size(0) for s in samples)
+
+    def _pad(t, value):
+        return F.pad(t, (0, max_len - t.size(0)), value=value)
+
+    batch = {
+        "input_ids": torch.stack([_pad(s["input_ids"], pad_token_id) for s in samples]),
+        "labels": torch.stack([_pad(s["labels"], pad_token_id) for s in samples]),
+        "response_mask": torch.stack([_pad(s["response_mask"], 0) for s in samples]),
     }
+    if "advantage" in samples[0]:
+        batch["advantage"] = torch.stack([s["advantage"] for s in samples])
+    if "old_log_probs" in samples[0]:
+        batch["old_log_probs"] = torch.stack([
+            _pad(s["old_log_probs"], 0.0) for s in samples
+        ])
+    return batch
+
+
+class ListDataset(Dataset):
+    """Simple dataset wrapping a list of dicts for use with DataLoader."""
+    def __init__(self, items):
+        self.items = items
+    def __len__(self):
+        return len(self.items)
+    def __getitem__(self, idx):
+        return self.items[idx]

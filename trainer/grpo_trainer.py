@@ -28,12 +28,12 @@ if __name__ == "__main__":
 
     # GRPO hyperparameters:
     parser.add_argument("--lr", type=float, default=1e-5)
-    parser.add_argument("--num_iterations", type=int, default=200, help="Number of GRPO steps.")
-    parser.add_argument("--rollout_epochs", type=int, default=1, help="Epochs per rollout batch.")
-    parser.add_argument("--batch_size",  type=int, default=8, help="Total rollout batch size.")
-    parser.add_argument("--micro_batch", type=int, default=1, help="Micro batch size.")
-    parser.add_argument("--num_generations", type=int, default=4, help="Responses per prompt.")
-    parser.add_argument("--beta", type=float, default=0.1, help="KL penalty coefficient.")
+    parser.add_argument("--num_iterations", type=int, default=250, help="Number of GRPO steps.")
+    parser.add_argument("--rollout_epochs", type=int, default=2, help="Epochs per rollout batch.")
+    parser.add_argument("--batch_size",  type=int, default=32, help="Total rollout batch size.")
+    parser.add_argument("--micro_batch", type=int, default=4, help="Micro batch size.")
+    parser.add_argument("--num_generations", type=int, default=8, help="Responses per prompt.")
+    parser.add_argument("--beta", type=float, default=0.05, help="KL penalty coefficient.")
     parser.add_argument("--clip_eps", type=float, default=0.2, help="PPO-style clipping range.")
     parser.add_argument("--advantage_eps", type=float, default=1e-6)
     parser.add_argument("--clip_grad_norm", type=float, default=1.0)
@@ -42,7 +42,7 @@ if __name__ == "__main__":
     parser.add_argument("--max_generation_length", type=int, default=2048)
 
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--log_interval", type=int, default=5)
+    parser.add_argument("--log_interval", type=int, default=10)
     parser.add_argument("--val_interval", type=int, default=50)
     parser.add_argument("--train_device", type=str, default="cuda:0")
     parser.add_argument("--valid_device", type=str, default="cuda:1")
@@ -81,7 +81,7 @@ if __name__ == "__main__":
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     
-    optimizer = AdamW(policy.parameters(), lr=args.lr, weight_decay=0.0, betas=(0.9, 0.95))
+    optimizer = AdamW(policy.parameters(), lr=args.lr, weight_decay=0.0, betas=(0.9, 0.95), fused=True)
 
     training_steps = args.num_iterations * args.rollout_epochs
     scheduler = get_cosine_schedule_with_warmup(
