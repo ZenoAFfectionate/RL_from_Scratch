@@ -30,7 +30,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature.")
     parser.add_argument("--top_p", type=float, default=1.0, help="Top-p (nucleus) sampling.")
-    parser.add_argument("--max_tokens", type=int, default=4096, help="Max tokens to generate.")
+    parser.add_argument("--max_tokens", type=int, default=8192, help="Max tokens to generate.")
 
     args = parser.parse_args()
 
@@ -59,7 +59,7 @@ if __name__ == "__main__":
         prompt_template.format(problem=example["problem"])
         for example in dataset
     ]
-    ground_truth_tests = [example["test"] for example in dataset]
+    truth_tests = [example["test"] for example in dataset]
 
     # load vLLM model
     vllm_model = LLM(
@@ -71,7 +71,7 @@ if __name__ == "__main__":
         temperature=args.temperature,
         top_p=args.top_p,
         max_tokens=args.max_tokens,
-        stop=["```"],
+        stop=["</solution>"],
         include_stop_str_in_output=True,
     )
     
@@ -80,7 +80,7 @@ if __name__ == "__main__":
         vllm_model=vllm_model,
         reward_fn=code_reward_fn,
         prompts=prompts,
-        answers=ground_truth_tests,
+        answers=truth_tests,
         eval_sampling_params=sampling_params,
         output_filepath=f"../results/baseline_code.jsonl",
     )

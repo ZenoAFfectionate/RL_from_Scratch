@@ -8,7 +8,7 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
 sys.path.append(project_root)
 
-from utils.rewards import r1_zero_reward_fn
+from utils.rewards import dsr1_reward_fn
 from utils.vllm_helper import evaluate_vllm
 
 
@@ -30,7 +30,7 @@ if __name__ == "__main__":
     
     parser.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature.")
     parser.add_argument("--top_p", type=float, default=1.0, help="Top-p (nucleus) sampling.")
-    parser.add_argument("--max_tokens", type=int, default=4096, help="Maximum number of tokens to generate.")
+    parser.add_argument("--max_tokens", type=int, default=8192, help="Maximum number of tokens to generate.")
 
     args = parser.parse_args()
 
@@ -54,7 +54,7 @@ if __name__ == "__main__":
     print(f"Success!\nLoaded {len(dataset)} examples.")
 
     # format each example into a string prompt and extract the answer
-    prompts = [prompt_template.format(question=example["problem"]) for example in dataset]
+    prompts = [prompt_template.format(problem=example["problem"]) for example in dataset]
     ground_truth_answers = [example["solution"] for example in dataset]
 
     # load vLLM model and create a sampling params object
@@ -69,9 +69,9 @@ if __name__ == "__main__":
 
     evaluate_vllm(
         vllm_model=vllm_model,
-        reward_fn=r1_zero_reward_fn,
+        reward_fn=dsr1_reward_fn,
         prompts=prompts,
         answers=ground_truth_answers,
         eval_sampling_params=sampling_params,
-        output_filepath=f"./results/baseline_math.jsonl"
+        output_filepath=f"../results/baseline_math.jsonl"
     )

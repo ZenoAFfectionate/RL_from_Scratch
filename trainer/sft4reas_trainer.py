@@ -69,7 +69,6 @@ if __name__ == "__main__":
     reward_fun = {
         "math": dsr1_reward_fn,
         "gsmk": gsmk_reward_fn,
-        "mmlu": mmlu_reward_fn,
         "code": code_reward_fn,
     }[args.dataset]
 
@@ -99,7 +98,7 @@ if __name__ == "__main__":
         temperature=args.temperature,
         top_p=args.top_p,
         max_tokens=args.max_tokens,
-        stop=["</answer>"],
+        stop=["</answer>", "</solution>"],
         include_stop_str_in_output=True,
     )
 

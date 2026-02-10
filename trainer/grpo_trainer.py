@@ -13,7 +13,7 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
 sys.path.insert(0, project_root)
 
-from utils.rewards import r1_zero_reward_fn
+from utils.rewards import *
 from utils.vllm_helper import init_policy, init_vllm
 from algorithms.grpo import GRPO_Trainer
 
@@ -23,14 +23,14 @@ if __name__ == "__main__":
 
     parser.add_argument("--model_id", type=str, default="Qwen/Qwen2.5-Math-1.5B")
     parser.add_argument("--dataset", type=str, default="math", choices=["math", "code"])
-    parser.add_argument("--problem_key", type=str, default="problem")
+    parser.add_argument("--problem_key",  type=str, default="problem")
     parser.add_argument("--solution_key", type=str, default="solution")
 
     # GRPO hyperparameters:
     parser.add_argument("--lr", type=float, default=1e-5)
     parser.add_argument("--num_iterations", type=int, default=200, help="Number of GRPO steps.")
-    parser.add_argument("--rollout_epochs", type=int, default=2, help="Epochs per rollout batch.")
-    parser.add_argument("--batch_size",  type=int, default=4, help="Total rollout batch size.")
+    parser.add_argument("--rollout_epochs", type=int, default=1, help="Epochs per rollout batch.")
+    parser.add_argument("--batch_size",  type=int, default=8, help="Total rollout batch size.")
     parser.add_argument("--micro_batch", type=int, default=1, help="Micro batch size.")
     parser.add_argument("--num_generations", type=int, default=4, help="Responses per prompt.")
     parser.add_argument("--beta", type=float, default=0.1, help="KL penalty coefficient.")
@@ -44,8 +44,8 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--log_interval", type=int, default=5)
     parser.add_argument("--val_interval", type=int, default=50)
-    parser.add_argument("--train_device", type=str, default="cuda:1")
-    parser.add_argument("--valid_device", type=str, default="cuda:2")
+    parser.add_argument("--train_device", type=str, default="cuda:0")
+    parser.add_argument("--valid_device", type=str, default="cuda:1")
     parser.add_argument("--output_dir", type=str, default="../checkpoints/GRPO")
 
     parser.add_argument("--wandb_project", type=str, default="GRPO-MATH")
@@ -57,7 +57,7 @@ if __name__ == "__main__":
     random.seed(args.seed)
 
     print(f">>> Loading prompt template...")
-    with open(f'./prompts/{args.dataset}.jsonl', "r") as f:
+    with open(f'./prompts/{args.dataset}.prompt', "r") as f:
         args.prompt_template = f.read()
 
     print(">>> Loading training and validation data...")
@@ -65,6 +65,13 @@ if __name__ == "__main__":
         train_data = [json.loads(line) for line in f]
     with open(f'../data/{args.dataset}/valid.jsonl', "r") as f:
         valid_data = [json.loads(line) for line in f]
+
+    reward_fun = {
+        "math": dsr1_reward_fn,
+        "gsmk": gsmk_reward_fn,
+        "code": code_reward_fn,
+    }[args.dataset]
+
 
     # --------------------------------------------------
     #  Initialize policy model, optimizer and scheduler
@@ -93,7 +100,7 @@ if __name__ == "__main__":
         train_model=policy,
         valid_model=valid_model,
         tokenizer=tokenizer,
-        reward_func=r1_zero_reward_fn,
+        reward_fun=reward_fun,
         optimizer=optimizer,
         scheduler=scheduler,
         train_dataset=train_data,

@@ -1,11 +1,3 @@
-A conversation between User and Assistant. The User asks a question, and the Assistant write a correct, complete Python solution.
-
-**Important formatting rules:**
-- Wrap your final solution inside a single Python fenced code block: ```python ... ```
-- Do NOT include any explanation outside the code block.
-- If the problem requires reading input, use `input()` or `sys.stdin`.
-- If the problem requires printing output, use `print()`.
-- If the problem asks you to write a function, define the function exactly as specified.
-
+A conversation between User and Assistant. The User asks a question, and the Assistant solves it. The Assistant first thinks about the reasoning process in the mind and then provides the User with the correct, complete Python code solution. The reasoning process is enclosed within <think> </think> and the code solution is enclosed within <solution> </solution> tags, respectively, i.e., <think> reasoning process here </think> <solution> code here </solution>.
 User: {problem}
-Assistant:
+Assistant: <think>

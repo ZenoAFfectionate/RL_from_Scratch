@@ -32,7 +32,6 @@ if __name__ == "__main__":
 
     parser.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature.")
     parser.add_argument("--top_p", type=float, default=1.0, help="Top-p sampling.")
-    parser.add_argument("--min_tokens", type=int, default=1,   help="Minimum number of tokens to generate.")
     parser.add_argument("--max_tokens", type=int, default=512, help="Maximum number of tokens to generate.")
 
     args = parser.parse_args()
@@ -68,7 +67,6 @@ if __name__ == "__main__":
     sampling_params = SamplingParams(
         temperature=args.temperature,
         top_p=args.top_p,
-        min_tokens=args.min_tokens,
         max_tokens=args.max_tokens,
         stop=["\n", "Question:"], 
         include_stop_str_in_output=False

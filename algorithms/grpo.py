@@ -27,7 +27,7 @@ class GRPO_Trainer:
       4. Evaluate periodically on a held-out validation set
     """
 
-    def __init__(self, train_model, valid_model, tokenizer, reward_func,
+    def __init__(self, train_model, valid_model, tokenizer, reward_fun,
                  optimizer, scheduler, train_dataset, valid_dataset, args):
         # model and dataset:
         self.model = train_model
@@ -35,7 +35,7 @@ class GRPO_Trainer:
         self.tokenizer = tokenizer
         self.optimizer = optimizer
         self.scheduler = scheduler
-        self.reward_func = reward_func
+        self.reward_fun = reward_fun
         self.train_dataset = train_dataset
         self.valid_dataset = valid_dataset
         self.train_device = args.train_device
@@ -52,10 +52,11 @@ class GRPO_Trainer:
         self.advantage_eps = args.advantage_eps
         self.log_interval = args.log_interval
         self.val_interval = args.val_interval
-        self.problem_key = getattr(args, "problem_key", "problem")
+        self.problem_key  = getattr(args, "problem_key",  "problem")
         self.solution_key = getattr(args, "solution_key", "solution")
+        self.output_dir = args.output_dir + f"4{args.dataset}"
 
-        wandb_project = getattr(args, "wandb_project", "GRPO-MATH")
+        wandb_project = getattr(args, "wandb_project", "GRPO-Reasoning")
         self.wandb_config = vars(args) if hasattr(args, "__dict__") else {}
 
         self.micro_batch = args.micro_batch
@@ -70,18 +71,19 @@ class GRPO_Trainer:
         self.rollout_sampling_params = SamplingParams(
             temperature=args.sampling_temperature,
             max_tokens=args.max_generation_length,
-            stop=["<|endoftext|>", "</s>", "</answer>"],
+            stop=["</answer>", "</solution>", "<|endoftext|>"],
+            include_stop_str_in_output=True,
             n=self.num_generations,
         )
         self.eval_sampling_params = SamplingParams(
             temperature=0.0,
             max_tokens=args.max_generation_length,
-            stop=["<|endoftext|>", "</s>", "</answer>"],
+            stop=["</answer>", "</solution>", "<|endoftext|>"],
             include_stop_str_in_output=True,
         )
 
-        os.makedirs(self.args.output_dir, exist_ok=True)
-        self.record_path = os.path.join(self.args.output_dir, "record.txt")
+        os.makedirs(self.output_dir, exist_ok=True)
+        self.record_path = os.path.join(self.output_dir, "record.txt")
         with open(self.record_path, "w") as f:
             f.write(f"GRPO Training Record — {datetime.now():%Y-%m-%d %H:%M:%S}\n")
             f.write("=" * 60 + "\n\n")
@@ -94,11 +96,11 @@ class GRPO_Trainer:
         with open(self.record_path, "a") as f:
             f.write(message + "\n")
 
-    def _format_prompt(self, question: str) -> str:
+    def _format_prompt(self, problem: str) -> str:
         """Apply the prompt template to a raw question string."""
         if self.prompt_template is not None:
-            return self.prompt_template.format(question=question)
-        return question
+            return self.prompt_template.format(problem=problem)
+        return problem
 
     def masked_mean(self, tensor, mask, dim=None):
         """Compute the mean of tensor along a given dimension"""
@@ -112,7 +114,7 @@ class GRPO_Trainer:
         Compute rewards for each group of rollout responses, normalized by the group size.
         """
         # compute raw rewards based on reward function and reshape to group-wise
-        rewards = [self.reward_func(r, g) for r, g in zip(rollout_responses, repeated_ground_truths)]
+        rewards = [self.reward_fun(r, g) for r, g in zip(rollout_responses, repeated_ground_truths)]
         raw_rewards = torch.tensor([res["reward"] for res in rewards], dtype=torch.float32)
 
         # compute mean for each group
@@ -392,7 +394,7 @@ class GRPO_Trainer:
 
         acc = evaluate_vllm(
             self.valid_model,
-            self.reward_func,
+            self.reward_fun,
             prompts,
             solutions,
             self.eval_sampling_params,
@@ -440,7 +442,7 @@ class GRPO_Trainer:
             f"Training Samples:            {len(self.train_dataset)}\n"
             f"Validation Samples:          "
             f"{len(self.valid_dataset) if self.valid_dataset else 0}\n"
-            f"Output Directory:            {self.args.output_dir}\n"
+            f"Output Directory:            {self.output_dir}\n"
             f"{'='*60}\n"
         )
         self._log(config_info)
@@ -448,7 +450,7 @@ class GRPO_Trainer:
 
     def _save_checkpoint(self, suffix: str = "checkpoint"):
         """Save a named checkpoint and return the path."""
-        path = os.path.join(self.args.output_dir, f"grpo_{suffix}.pt")
+        path = os.path.join(self.output_dir, f"grpo_{suffix}.pt")
         torch.save(self.model.state_dict(), path)
         self._log(f"Checkpoint saved to {path}")
         return path
