@@ -51,15 +51,14 @@ class GRPO_Trainer:
         self.advantage_eps = args.advantage_eps
         self.log_interval = args.log_interval
         self.val_interval = args.val_interval
-        self.problem_key  = getattr(args, "problem_key",  "problem")
         self.solution_key = getattr(args, "solution_key", "solution")
         self.output_dir = args.output_dir + f"4{args.dataset}"
 
         wandb_project = getattr(args, "wandb_project", "GRPO-Reasoning")
         self.wandb_config = vars(args) if hasattr(args, "__dict__") else {}
 
-        self.micro_batch = args.micro_batch
         self.batch_size = args.batch_size
+        self.micro_batch = args.micro_batch
         total_responses = args.batch_size * args.num_generations
         assert total_responses % args.micro_batch == 0, \
             "(batch_size * num_generations) must be divisible by micro_batch."
@@ -70,14 +69,14 @@ class GRPO_Trainer:
         self.rollout_sampling_params = SamplingParams(
             temperature=args.sampling_temperature,
             max_tokens=args.max_generation_length,
-            stop=["</answer>", "</solution>", "<|endoftext|>"],
+            stop=["</answer>", "</solution>"],
             include_stop_str_in_output=True,
             n=self.num_generations,
         )
         self.eval_sampling_params = SamplingParams(
             temperature=0.0,
             max_tokens=args.max_generation_length,
-            stop=["</answer>", "</solution>", "<|endoftext|>"],
+            stop=["</answer>", "</solution>"],
             include_stop_str_in_output=True,
         )
 
@@ -105,7 +104,7 @@ class GRPO_Trainer:
         """Compute the mean of tensor along a given dimension"""
         masked_tensor = tensor * mask
         sum_masked = masked_tensor.sum(dim=dim)
-        count_mask = mask.sum(dim=dim)  # no need clamp
+        count_mask = mask.sum(dim=dim).clamp(min=1)
         return sum_masked / count_mask  # normalization
     
     def compute_group_normalized_rewards(self, rollout_responses, repeated_ground_truths):
@@ -116,15 +115,16 @@ class GRPO_Trainer:
         rewards = [self.reward_fun(r, g) for r, g in zip(rollout_responses, repeated_ground_truths)]
         raw_rewards = torch.tensor([res["reward"] for res in rewards], dtype=torch.float32)
 
-        # compute mean for each group
+        # create reward matrix and compute mean for each group
         rewards_matrix = raw_rewards.view(-1, self.num_generations)
-        group_means = rewards_matrix.mean(dim=1, keepdim=True)
+        group_mean = rewards_matrix.mean(dim=1, keepdim=True)
+        normalized_rewards = rewards_matrix - group_mean
 
-        # normalize rewards within each group to get advantages
-        group_stds = rewards_matrix.std(dim=1, keepdim=True) + self.advantage_eps
-        normalized_rewards = (rewards_matrix - group_means) / group_stds
+        # compute std for each group and normalize by mean and std
+        group_std = rewards_matrix.std(dim=1, keepdim=True) + self.advantage_eps
+        normalized_rewards = normalized_rewards / group_std
+
         advantages = normalized_rewards.flatten()
-
         metadata = {  # metadata for logging
             "raw_rewards": raw_rewards,
             "reward_mean": raw_rewards.mean().item(),
@@ -148,8 +148,8 @@ class GRPO_Trainer:
         load_policy_into_vllm_instance(self.model, self.valid_model)
 
         # build formatted prompts and ground truths
-        prompts = [self._format_prompt(item[self.problem_key]) for item in batch_items]
-        grounds = [item[self.solution_key] for item in batch_items]
+        prompts = [self._format_prompt(item["problem"]) for item in batch_items]
+        grounds = [item["solution"] for item in batch_items]
 
         # generate N responses per prompt
         rollout_outputs = self.valid_model.generate(
@@ -399,7 +399,7 @@ class GRPO_Trainer:
         load_policy_into_vllm_instance(self.model, self.valid_model)
 
         prompts = [
-            self._format_prompt(item[self.problem_key])
+            self._format_prompt(item["problem"])
             for item in self.valid_dataset
         ]
         solutions = [item[self.solution_key] for item in self.valid_dataset]
@@ -442,7 +442,6 @@ class GRPO_Trainer:
             f"Batch Size:                  {self.batch_size} "
             f"(micro: {self.micro_batch})\n"
             f"Num Generations (group):     {self.args.num_generations}\n"
-            f"Gradient Accumulation Steps: {self.gradient_accumulation_steps}\n"
             f"Learning Rate:               {self.args.lr}\n"
             f"Loss Type:                   grpo_clip\n"
             f"Clip Eps:                    {self.clip_eps}\n"

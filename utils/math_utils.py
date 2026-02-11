@@ -761,6 +761,12 @@ def _normalize(expr: str) -> str:
     """Normalize answer expressions."""
     if expr is None: return None
 
+    # Remove LaTeX inline math delimiters: \(...\) and $...$
+    expr = expr.strip()
+    expr = re.sub(r'^\\\(', '', expr)
+    expr = re.sub(r'\\\)$', '', expr)
+    expr = expr.strip()
+
     # Remove enclosing `\text{}`.
     m = re.search("^\\\\text\{(?P<text>.+?)\}$", expr)
     if m is not None: expr = m.group("text")
@@ -814,6 +820,14 @@ def _normalize(expr: str) -> str:
 
     expr = _inject_implicit_mixed_number(expr)
     expr = expr.replace(" ", "")
+
+    # Normalize math function parentheses: sin(3x) → sin3x, cos(2t) → cos2t
+    # This ensures \sin(3x) and \sin 3x normalize to the same form.
+    _math_funcs = (
+        r'(?:sin|cos|tan|cot|sec|csc|log|ln|exp|'
+        r'arcsin|arccos|arctan|sinh|cosh|tanh)'
+    )
+    expr = re.sub(fr'({_math_funcs})\(([^()]*)\)', r'\1\2', expr)
 
     # if we somehow still have latex braces here, just drop them
     expr = expr.replace("{", "")

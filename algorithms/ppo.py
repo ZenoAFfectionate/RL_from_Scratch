@@ -56,21 +56,6 @@ class PPO_Trainer:
     """
     PPO (Proximal Policy Optimization) Trainer for Language Models.
 
-    Implements the full PPO training loop for RLHF / reward-based LM
-    fine-tuning:
-
-      1. **Rollout**:  Generate responses per prompt via vLLM.
-      2. **Reward**:   Score each response with a reward function.
-      3. **Critic**:   Estimate per-token values with a learned ValueHead
-                       on top of the policy model's hidden states.
-      4. **GAE**:      Compute Generalized Advantage Estimation from the
-                       per-token rewards (environment reward + KL penalty)
-                       and value estimates.
-      5. **Policy Update**: Clipped surrogate objective (PPO-Clip).
-      6. **Value Update**:  Clipped value-function loss.
-      7. **Entropy Bonus**: Encourages exploration.
-      8. **Evaluate**: Periodically evaluate on a held-out validation set.
-
     Key differences from GRPO:
       - Uses a learned value function (critic) rather than group-relative
         baselines, so only **one** response per prompt is needed.
@@ -161,13 +146,14 @@ class PPO_Trainer:
         self.rollout_sampling_params = SamplingParams(
             temperature=args.sampling_temperature,
             max_tokens=args.max_generation_length,
-            stop=["<|endoftext|>", "</s>", "</answer>"],
-            n=1,
+            stop=["</answer>", "</solution>"],
+            include_stop_str_in_output=True,
+            n=self.num_generations,
         )
         self.eval_sampling_params = SamplingParams(
             temperature=0.0,
             max_tokens=args.max_generation_length,
-            stop=["<|endoftext|>", "</s>", "</answer>"],
+            stop=["</answer>", "</solution>"],
             include_stop_str_in_output=True,
         )
 
@@ -195,6 +181,7 @@ class PPO_Trainer:
     def _build_attention_mask(self, input_ids):
         """Build an attention mask that excludes padding tokens."""
         return (input_ids != self.tokenizer.pad_token_id).long()
+
 
     def masked_mean(self, tensor, mask, dim=None):
         """Mean of *tensor* over positions where mask is nonzero."""
@@ -238,7 +225,9 @@ class PPO_Trainer:
         logits = outputs.logits
         hidden_states = outputs.hidden_states[-1]
 
-        # compute per-token log-probs
+        # ==========================================
+        # compute per-token log-probs [Inefficient!]
+        # ==========================================
         log_probs = F.log_softmax(logits, dim=-1)
         token_log_probs = torch.gather(
             log_probs, dim=-1, index=labels.unsqueeze(-1)

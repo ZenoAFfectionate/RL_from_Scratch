@@ -23,23 +23,22 @@ if __name__ == "__main__":
 
     parser.add_argument("--model_id", type=str, default="Qwen/Qwen2.5-Math-1.5B")
     parser.add_argument("--dataset", type=str, default="math", choices=["math", "code"])
-    parser.add_argument("--problem_key",  type=str, default="problem")
     parser.add_argument("--solution_key", type=str, default="solution")
 
     # GRPO hyperparameters:
-    parser.add_argument("--lr", type=float, default=1e-5)
+    parser.add_argument("--lr", type=float, default=5e-6)
     parser.add_argument("--num_iterations", type=int, default=250, help="Number of GRPO steps.")
     parser.add_argument("--rollout_epochs", type=int, default=2, help="Epochs per rollout batch.")
     parser.add_argument("--batch_size",  type=int, default=32, help="Total rollout batch size.")
-    parser.add_argument("--micro_batch", type=int, default=4, help="Micro batch size.")
+    parser.add_argument("--micro_batch", type=int, default=2, help="Micro batch size.")
     parser.add_argument("--num_generations", type=int, default=8, help="Responses per prompt.")
-    parser.add_argument("--beta", type=float, default=0.05, help="KL penalty coefficient.")
+    parser.add_argument("--beta", type=float, default=0.02, help="KL penalty coefficient.")
     parser.add_argument("--clip_eps", type=float, default=0.2, help="PPO-style clipping range.")
     parser.add_argument("--advantage_eps", type=float, default=1e-6)
     parser.add_argument("--clip_grad_norm", type=float, default=1.0)
 
-    parser.add_argument("--sampling_temperature", type=float, default=1.0)
-    parser.add_argument("--max_generation_length", type=int, default=2048)
+    parser.add_argument("--sampling_temperature", type=float, default=0.8)
+    parser.add_argument("--max_generation_length", type=int, default=4096)
 
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--log_interval", type=int, default=10)

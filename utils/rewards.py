@@ -105,14 +105,14 @@ def dsr1_reward_fn(response, ground_truth, fast=False):
     """
     if re.search(r"</think>\s*<answer>", response) and "</answer>" in response:
         model_answer = response.split("<answer>")[-1].replace("</answer>", "")
-        # 
+        #
         if "\\boxed" in model_answer:
             model_answer = extract_answer(model_answer)
             if model_answer is None:
                 return {
                     "format_reward": 1.0,
                     "answer_reward": 0.0,
-                    "reward": 0.1
+                    "reward": 0.0
                 }
         if isinstance(ground_truth, float) or isinstance(ground_truth, int):
             ground_truth = str(ground_truth)
@@ -137,7 +137,7 @@ def dsr1_reward_fn(response, ground_truth, fast=False):
             return {
                 "format_reward": 1.0,
                 "answer_reward": 0.0,
-                "reward": 0.1
+                "reward": 0.0
             }
     else:
         # both unformatted and wrong answer...
@@ -158,11 +158,11 @@ def code_reward_fn(response, ground_truth, timeout=10.0, test_type=None):
       3. Running extracted code against provided test cases —
          passing ALL tests earns answer_reward = 1.0.
 
-    Reward structure (mirrors r1_zero_reward_fn):
+    Reward structure (mirrors dsr1_reward_fn):
       - format_reward:  1.0 if code compiles,       0.0 otherwise.
       - answer_reward:  1.0 if all tests pass,      0.0 otherwise.
       - partial_reward: fraction of tests passed (for softer shaping).
-      - reward:         1.0 only when ALL tests pass, 0.0 otherwise.
+      - reward:         1.0 when ALL tests pass, 0.0 otherwise.
     """
     result = evaluate_code_response(
         response=response,
@@ -170,7 +170,7 @@ def code_reward_fn(response, ground_truth, timeout=10.0, test_type=None):
         timeout=timeout,
         test_type=test_type,
     )
-    
+
     return {
         "format_reward":  result["format_reward"],
         "answer_reward":  result["answer_reward"],
