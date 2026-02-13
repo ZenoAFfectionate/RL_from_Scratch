@@ -6,7 +6,7 @@ import argparse
 
 import torch
 from torch.optim import AdamW
-from transformers import get_cosine_schedule_with_warmup
+from torch.optim.lr_scheduler import LambdaLR
 
 # Add parent directory to path for imports
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -88,12 +88,10 @@ if __name__ == "__main__":
 
     optimizer = AdamW(policy.parameters(), lr=args.lr, weight_decay=0.0, betas=(0.9, 0.95), fused=True)
     
-    training_steps = args.num_iterations * args.rollout_epochs
-    scheduler = get_cosine_schedule_with_warmup(
-        optimizer,
-        num_warmup_steps=int(0.05*training_steps),
-        num_training_steps=training_steps,
-    )
+    # Constant LR: RL algorithms use clipping + KL penalty to control
+    # update magnitude, so cosine decay is unnecessary and can hurt
+    # learning in later iterations when the data distribution shifts.
+    scheduler = LambdaLR(optimizer, lr_lambda=lambda _: 1.0)
 
     print(">>> Initializing validation model...")
     valid_model = init_vllm(args.model_id, args.valid_device, args.seed)

@@ -75,7 +75,7 @@ class GRPO_Trainer:
         )
         self.eval_sampling_params = SamplingParams(
             temperature=0.0,
-            max_tokens=args.max_generation_length,
+            max_tokens=max(args.max_generation_length, 8192),
             stop=["</answer>", "</solution>"],
             include_stop_str_in_output=True,
         )
@@ -149,7 +149,7 @@ class GRPO_Trainer:
 
         # build formatted prompts and ground truths
         prompts = [self._format_prompt(item["problem"]) for item in batch_items]
-        grounds = [item["solution"] for item in batch_items]
+        grounds = [item[self.solution_key] for item in batch_items]
 
         # generate N responses per prompt
         rollout_outputs = self.valid_model.generate(
@@ -404,7 +404,7 @@ class GRPO_Trainer:
         ]
         solutions = [item[self.solution_key] for item in self.valid_dataset]
 
-        acc = evaluate_vllm(
+        metrics = evaluate_vllm(
             self.valid_model,
             self.reward_fun,
             prompts,
@@ -413,8 +413,14 @@ class GRPO_Trainer:
             f'../results/grpo4{self.args.dataset}.jsonl'
         )
 
+        acc = metrics["accuracy"]
         self._log(f"Step {self.global_step}: Validation Accuracy = {acc:.2f}%")
-        wandb.log({"valid/accuracy": acc, "step": self.global_step})
+        wandb.log({
+            "valid/accuracy": acc,
+            "valid/format_accuracy": metrics["format_accuracy"],
+            "valid/answer_accuracy": metrics["answer_accuracy"],
+            "step": self.global_step,
+        })
 
 
     def _build_log_dict(self, step_metrics, reward_meta, experiences):

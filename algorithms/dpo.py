@@ -178,8 +178,8 @@ class DPO_Trainer:
         response_mask: torch.Tensor,
     ) -> torch.Tensor:
         """
-        Compute the length-normalised log-probability of **response tokens
-        only** under a given model.
+        Compute the summed log-probability of **response tokens only**
+        under a given model (no length normalisation).
 
         Uses fused ``F.cross_entropy`` internally so the full (B, T, V)
         log-softmax tensor is **never materialised**, saving significant
@@ -204,10 +204,9 @@ class DPO_Trainer:
             reduction="none",
         ).view(shift_labels.shape)
 
-        # compute token log-probabilities and do length-normalisation
+        # sum token log-probabilities (no length normalisation)
         token_log_probs = -per_token_nll * shift_mask
-        token_count = shift_mask.sum(dim=-1).clamp(min=1)
-        return token_log_probs.sum(dim=-1) / token_count
+        return token_log_probs.sum(dim=-1)
 
     def _dpo_loss_from_log_probs(
         self,
@@ -434,7 +433,8 @@ class DPO_Trainer:
 
             for _, batch in enumerate(self.train_loader):
                 # Forward + backward (scaled for gradient accumulation)
-                loss, metadata = self.compute_loss(batch)
+                with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                    loss, metadata = self.compute_loss(batch)
                 (loss / self.gradient_accumulation_steps).backward()
 
                 # record metrics fir current gradient-accumulation window

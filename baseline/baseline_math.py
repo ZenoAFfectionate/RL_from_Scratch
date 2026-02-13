@@ -30,7 +30,7 @@ if __name__ == "__main__":
     
     parser.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature.")
     parser.add_argument("--top_p", type=float, default=1.0, help="Top-p (nucleus) sampling.")
-    parser.add_argument("--max_tokens", type=int, default=8192, help="Maximum number of tokens to generate.")
+    parser.add_argument("--max_tokens", type=int, default=4096, help="Maximum number of tokens to generate.")
 
     args = parser.parse_args()
 
@@ -58,13 +58,17 @@ if __name__ == "__main__":
     ground_truth_answers = [example["solution"] for example in dataset]
 
     # load vLLM model and create a sampling params object
-    vllm_model = LLM(model=args.model_name, trust_remote_code=True, max_model_len=4096)
+    vllm_model = LLM(
+        model=args.model_name, 
+        trust_remote_code=True, 
+        max_model_len=args.max_tokens
+    )
     sampling_params = SamplingParams(
         temperature=args.temperature,
         top_p=args.top_p,
         max_tokens=args.max_tokens,
         stop=["</answer>"],
-        include_stop_str_in_output=True
+        include_stop_str_in_output=True,
     )
 
     evaluate_vllm(

@@ -68,10 +68,12 @@ def evaluate_vllm(
     answers: List[str],  # ground truth answers
     eval_sampling_params: SamplingParams,
     output_filepath: str = ""
-) -> float:
+) -> dict:
     """
     Evaluate a language model on a list of prompts,
     compute evaluation metrics, and serialize results to disk.
+
+    Returns a dict with keys: accuracy, format_accuracy, answer_accuracy.
     """
     # generate outputs for each example using the vLLM engine
     print(f"\nGenerating responses for {len(prompts)} problems...")
@@ -126,4 +128,8 @@ def evaluate_vllm(
                 f.write("\n")
         print(f"✅ Results saved successfully to {output_filepath}.")
 
-    return accuracy
+    return {
+        "accuracy": accuracy,
+        "format_accuracy": format_accuracy,
+        "answer_accuracy": answer_accuracy,
+    }

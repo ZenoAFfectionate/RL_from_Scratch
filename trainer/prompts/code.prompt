@@ -1,3 +1,4 @@
-A conversation between User and Assistant. The User asks a question, and the Assistant solves it. The Assistant first thinks about the reasoning process in the mind and then provides the User with the correct, complete Python code solution. The reasoning process is enclosed within <think> </think> and the code solution is enclosed within <solution> </solution> tags, respectively, i.e., <think> reasoning process here </think> <solution> code here </solution>.
+The User asks a question, and the Assistant provides the User with the correct, complete Python code solution. The code solution is enclosed within <solution> </solution> tags, i.e., <solution> python code </solution>. If a function name is specified or implied by the examples, use that exact name. If the problem specifies an Input/Output format, your code must read from stdin using input() and print results to stdout. Do not just define a function — you must call it.
+
 User: {problem}
-Assistant: <think>
+Assistant: <solution>

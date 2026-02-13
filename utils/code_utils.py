@@ -1,18 +1,14 @@
 import ast
-import atexit
-import contextlib
 import io
 import json
-import multiprocessing as mp
 import os
 import re
-import resource
 import signal
 import subprocess
 import sys
 import textwrap
 import warnings
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 
@@ -47,6 +43,8 @@ def extract_code_from_response(response: str) -> Optional[str]:
             return inner if inner is not None else code
 
     cleaned = _THINK_RE.sub("", response).strip()
+    # Strip orphan closing tags left over when the opening tag was in the prompt
+    cleaned = re.sub(r"</solution>\s*$", "", cleaned).strip()
     return cleaned or response.strip() or None
 
 
@@ -64,7 +62,15 @@ def check_syntax(code: str) -> Tuple[bool, Optional[str]]:
 
 
 # ---------------------------------------------------------------------------
-# Sandbox helpers
+# Subprocess helpers — all code execution uses isolated subprocesses with
+# process-group killing to prevent deadlocks and resource leaks.
+#
+# NOTE: We intentionally avoid persistent process pools (multiprocessing.Pool)
+# because LLM-generated code can hang workers in ways that SIGALRM cannot
+# interrupt (C-extension loops, blocking I/O, signal overrides).  Stuck
+# workers accumulate over thousands of evaluations and eventually deadlock
+# the pool.  Fresh subprocesses with start_new_session=True + os.killpg()
+# guarantee that every evaluation is fully cleaned up on timeout.
 # ---------------------------------------------------------------------------
 
 def _fail(error: str, timeout: bool = False) -> Dict[str, Any]:
@@ -86,151 +92,56 @@ def _make_summary(details: List[Dict[str, Any]], total: int) -> Dict[str, Any]:
     }
 
 
-@contextlib.contextmanager
-def _sandbox_limits(cpu_timeout: int, max_memory: int):
-    """Set CPU alarm and memory limits for pool workers; restore on exit."""
-    def _alarm_handler(_signum, _frame):
-        raise TimeoutError("CPU time limit exceeded")
+def _safe_subprocess_run(
+    args: List[str],
+    input_data: Optional[str] = None,
+    timeout: float = 10.0,
+) -> Tuple[str, str, int, bool]:
+    """Run a subprocess in a new session/process-group.
 
-    prev = signal.signal(signal.SIGALRM, _alarm_handler)
-    signal.alarm(cpu_timeout)
-    old_rlimit = resource.getrlimit(resource.RLIMIT_AS)
+    On timeout, kills the **entire process group** (including any child
+    processes the executed code may have spawned), preventing zombie
+    processes and resource leaks.
+
+    Returns ``(stdout, stderr, returncode, timed_out)``.
+    """
+    proc = subprocess.Popen(
+        args,
+        stdin=subprocess.PIPE if input_data is not None else subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,  # new process group for reliable killing
+    )
     try:
-        resource.setrlimit(resource.RLIMIT_AS, (max_memory, max_memory))
-    except (ValueError, OSError):
-        pass
+        stdout, stderr = proc.communicate(input=input_data, timeout=timeout)
+        return stdout, stderr, proc.returncode, False
+    except subprocess.TimeoutExpired:
+        _kill_proc_group(proc)
+        return "", "", -1, True
+    except Exception:
+        _kill_proc_group(proc)
+        raise
+
+
+def _kill_proc_group(proc: subprocess.Popen) -> None:
+    """Kill an entire process group and wait for cleanup."""
     try:
-        yield
-    finally:
-        signal.alarm(0)
-        signal.signal(signal.SIGALRM, prev)
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
         try:
-            resource.setrlimit(resource.RLIMIT_AS, old_rlimit)
-        except (ValueError, OSError):
+            proc.kill()
+        except (ProcessLookupError, OSError):
             pass
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        pass
 
 
 # ---------------------------------------------------------------------------
-# Pool worker (handles both single and batch tests)
+# Assert-based tests (MBPP / KodCode style)
 # ---------------------------------------------------------------------------
-
-def _pool_worker_batch(task: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Execute candidate code once, then run each test in the same namespace."""
-    warnings.filterwarnings("ignore", category=SyntaxWarning)
-    code = task["code"]
-    tests = task["tests"]
-    cpu_timeout = task.get("cpu_timeout", 10)
-    max_memory = task.get("max_memory", 512 * 1024 * 1024)
-
-    _globals: dict = {"__builtins__": __builtins__}
-    _old = sys.stdout
-
-    with _sandbox_limits(cpu_timeout, max_memory):
-        try:
-            exec(compile(code, "<candidate>", "exec"), _globals)
-        except TimeoutError as e:
-            return [_fail(str(e), timeout=True) for _ in tests]
-        except Exception as e:
-            return [_fail(str(e)) for _ in tests]
-        finally:
-            sys.stdout = _old
-
-        results: List[Dict[str, Any]] = []
-        for test in tests:
-            buf = io.StringIO()
-            sys.stdout = buf
-            try:
-                exec(compile(test, "<test>", "exec"), _globals)
-                sys.stdout = _old
-                results.append({"passed": True, "error": None,
-                                "stdout": buf.getvalue(), "timeout": False})
-            except TimeoutError as e:
-                sys.stdout = _old
-                results.append(_fail(str(e), timeout=True))
-                results.extend(
-                    _fail("Skipped (timeout)", timeout=True)
-                    for _ in range(len(tests) - len(results)))
-                return results
-            except Exception as e:
-                sys.stdout = _old
-                results.append({"passed": False, "error": str(e),
-                                "stdout": buf.getvalue(), "timeout": False})
-
-    return results
-
-
-class SandboxPool:
-    """Persistent process pool that eliminates per-task interpreter startup."""
-
-    _instance: Optional["SandboxPool"] = None
-
-    def __init__(self, max_workers: Optional[int] = None):
-        self._max_workers = max_workers or min(os.cpu_count() or 4, 8)
-        self._pool: Optional[mp.pool.Pool] = None
-
-    def _ensure_pool(self):
-        if self._pool is None:
-            ctx = mp.get_context("forkserver")
-            self._pool = ctx.Pool(
-                processes=self._max_workers, maxtasksperchild=50)
-
-    @classmethod
-    def get_instance(cls, max_workers: Optional[int] = None) -> "SandboxPool":
-        if cls._instance is None:
-            cls._instance = cls(max_workers)
-        return cls._instance
-
-    def execute_batch_asserts(self, code: str, tests: List[str],
-                              timeout: float = 10.0,
-                              cpu_timeout: int = 10) -> List[Dict[str, Any]]:
-        self._ensure_pool()
-        task = {"code": code, "tests": tests, "cpu_timeout": cpu_timeout}
-        ar = self._pool.apply_async(_pool_worker_batch, (task,))
-        try:
-            return ar.get(timeout=timeout)
-        except mp.TimeoutError:
-            return [_fail("Execution timed out", timeout=True) for _ in tests]
-        except Exception as e:
-            return [_fail(f"Pool error: {e}") for _ in tests]
-
-    def execute_parallel(self, tasks: List[Tuple[str, str]],
-                         timeout: float = 10.0,
-                         cpu_timeout: int = 10) -> List[Dict[str, Any]]:
-        self._ensure_pool()
-        async_results = []
-        for code, test_code in tasks:
-            t = {"code": code, "tests": [test_code], "cpu_timeout": cpu_timeout}
-            async_results.append(self._pool.apply_async(_pool_worker_batch, (t,)))
-        results = []
-        for ar in async_results:
-            try:
-                results.append(ar.get(timeout=timeout)[0])
-            except mp.TimeoutError:
-                results.append(_fail("Execution timed out", timeout=True))
-            except Exception as e:
-                results.append(_fail(f"Pool error: {e}"))
-        return results
-
-    def shutdown(self):
-        if self._pool is not None:
-            self._pool.terminate()
-            self._pool.join()
-            self._pool = None
-
-    def __del__(self):
-        self.shutdown()
-
-
-def _cleanup_pool():
-    global _stdio_pool
-    if SandboxPool._instance is not None:
-        SandboxPool._instance.shutdown()
-    if _stdio_pool is not None:
-        _stdio_pool.shutdown(wait=False)
-        _stdio_pool = None
-
-atexit.register(_cleanup_pool)
-
 
 _BATCH_ASSERT_TEMPLATE = textwrap.dedent(r'''
 import sys, io, json, resource, signal, warnings
@@ -251,12 +162,17 @@ _code = {code_repr}
 _tests = {tests_repr}
 
 _globals = {{"__builtins__": __builtins__}}
+_real_stdout = sys.stdout
+sys.stdout = io.StringIO()
 try:
     exec(compile(_code, "<candidate>", "exec"), _globals)
 except Exception as _e:
+    sys.stdout = _real_stdout
     _err = {{"passed": False, "error": str(_e), "stdout": "", "timeout": False}}
     print(json.dumps([_err] * len(_tests)))
     sys.exit(0)
+finally:
+    sys.stdout = _real_stdout
 
 _results = []
 for _t in _tests:
@@ -282,52 +198,71 @@ def _run_batch_asserts_subprocess(
     max_memory: int = 512 * 1024 * 1024,
     cpu_timeout: int = 10,
 ) -> List[Dict[str, Any]]:
-    """Fallback: run all asserts in a single subprocess (no pool)."""
+    """Run all asserts in a single isolated subprocess."""
     script = _BATCH_ASSERT_TEMPLATE.format(
         code_repr=repr(code),
         tests_repr=repr(tests),
         max_memory=max_memory,
         cpu_timeout=cpu_timeout,
     )
+    stdout, stderr, rc, timed_out = _safe_subprocess_run(
+        [sys.executable, "-S", "-W", "ignore::SyntaxWarning", "-c", script],
+        timeout=timeout,
+    )
+    if timed_out:
+        return [_fail("Execution timed out", timeout=True) for _ in tests]
     try:
-        result = subprocess.run(
-            [sys.executable, "-S", "-W", "ignore::SyntaxWarning", "-c", script],
-            capture_output=True, text=True, timeout=timeout,
-        )
-        return json.loads(result.stdout.strip())
-    except subprocess.TimeoutExpired:
-        return [{"passed": False, "error": "Execution timed out",
-                 "stdout": "", "timeout": True} for _ in tests]
-    except Exception as e:
-        return [{"passed": False, "error": f"Execution error: {e}",
-                 "stdout": "", "timeout": False} for _ in tests]
+        return json.loads(stdout.strip())
+    except (json.JSONDecodeError, ValueError) as e:
+        return [_fail(f"Output parse error: {e}") for _ in tests]
 
 
 def run_assert_tests(code: str, test_list: Union[str, List[str]],
-                     timeout: float = 10.0,
-                     use_pool: bool = True) -> Dict[str, Any]:
-    """Run assertion-based tests (MBPP / KodCode style)."""
+                     timeout: float = 10.0) -> Dict[str, Any]:
+    """Run assertion-based tests (MBPP / KodCode style) in an isolated subprocess."""
     if isinstance(test_list, str):
         test_list = [test_list]
     tests = [t.strip() for t in test_list]
-
-    if use_pool:
-        try:
-            pool = SandboxPool.get_instance()
-            details = pool.execute_batch_asserts(code, tests, timeout=timeout)
-        except Exception:
-            details = _run_batch_asserts_subprocess(code, tests, timeout=timeout)
-    else:
-        details = _run_batch_asserts_subprocess(code, tests, timeout=timeout)
-
+    details = _run_batch_asserts_subprocess(code, tests, timeout=timeout)
     return _make_summary(details, len(tests))
+
+
+# ---------------------------------------------------------------------------
+# Stdin/stdout-based tests (APPS / CodeContests style)
+# ---------------------------------------------------------------------------
+
+def _run_stdin_stdout_single(
+    code: str, stdin_data: str, expected_stdout: str, timeout: float
+) -> Dict[str, Any]:
+    """Execute *code* with *stdin_data* and compare stdout to *expected_stdout*."""
+    stdout, stderr, rc, timed_out = _safe_subprocess_run(
+        [sys.executable, "-S", "-W", "ignore::SyntaxWarning", "-c", code],
+        input_data=stdin_data,
+        timeout=timeout,
+    )
+    if timed_out:
+        return {
+            "passed": False,
+            "actual_output": "",
+            "expected_output": expected_stdout.strip(),
+            "error": "Execution timed out",
+            "timeout": True,
+        }
+    actual = stdout.strip()
+    expected = expected_stdout.strip()
+    return {
+        "passed": actual == expected,
+        "actual_output": actual,
+        "expected_output": expected,
+        "error": stderr.strip() if rc != 0 else None,
+        "timeout": False,
+    }
 
 
 def run_stdin_stdout_tests(
     code: str,
     test_cases: Union[str, Dict, List[Dict]],
     timeout: float = 10.0,
-    use_pool: bool = True,
 ) -> Dict[str, Any]:
     """
     Run stdin/stdout-based tests (APPS / CodeContests style).
@@ -383,29 +318,30 @@ def run_stdin_stdout_tests(
         norm_inputs.append(inp)
         norm_outputs.append(expected_out)
 
-    # Improvement D: parallel execution via a persistent ProcessPoolExecutor.
-    # stdin/stdout tests need real subprocess (for stdin piping), so we
-    # parallelise the subprocess calls rather than using the SandboxPool.
-    if use_pool and len(norm_inputs) > 1:
-        executor = _get_stdio_pool()
-        futures = {
-            executor.submit(
-                _run_stdin_stdout_single, code, inp, exp, timeout
-            ): i
-            for i, (inp, exp) in enumerate(zip(norm_inputs, norm_outputs))
-        }
-        indexed_results: Dict[int, Dict[str, Any]] = {}
-        for future in as_completed(futures):
-            idx = futures[future]
-            try:
-                indexed_results[idx] = future.result()
-            except Exception as e:
-                indexed_results[idx] = {
-                    "passed": False, "actual_output": "",
-                    "expected_output": norm_outputs[idx].strip(),
-                    "error": str(e), "timeout": False,
-                }
-        details = [indexed_results[i] for i in range(len(norm_inputs))]
+    # Parallel execution using threads.  Each thread spawns an isolated
+    # subprocess (via _safe_subprocess_run), so threads provide real
+    # parallelism because the GIL is released during subprocess I/O.
+    if len(norm_inputs) > 1:
+        max_workers = min(os.cpu_count() or 4, 8)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(
+                    _run_stdin_stdout_single, code, inp, exp, timeout
+                ): i
+                for i, (inp, exp) in enumerate(zip(norm_inputs, norm_outputs))
+            }
+            indexed_results: Dict[int, Dict[str, Any]] = {}
+            for future in as_completed(futures):
+                idx = futures[future]
+                try:
+                    indexed_results[idx] = future.result()
+                except Exception as e:
+                    indexed_results[idx] = {
+                        "passed": False, "actual_output": "",
+                        "expected_output": norm_outputs[idx].strip(),
+                        "error": str(e), "timeout": False,
+                    }
+            details = [indexed_results[i] for i in range(len(norm_inputs))]
     else:
         details = [
             _run_stdin_stdout_single(code, inp, exp, timeout)
@@ -416,58 +352,9 @@ def run_stdin_stdout_tests(
     return _make_summary(details, total)
 
 
-_stdio_pool: Optional[ProcessPoolExecutor] = None
-
-
-def _get_stdio_pool() -> ProcessPoolExecutor:
-    """Return a persistent ProcessPoolExecutor for stdin/stdout tests."""
-    global _stdio_pool
-    if _stdio_pool is None:
-        _stdio_pool = ProcessPoolExecutor(
-            max_workers=min(os.cpu_count() or 4, 8))
-    return _stdio_pool
-
-
-def _run_stdin_stdout_single(
-    code: str, stdin_data: str, expected_stdout: str, timeout: float
-) -> Dict[str, Any]:
-    """Execute *code* with *stdin_data* and compare stdout to *expected_stdout*."""
-    try:
-        result = subprocess.run(
-            [sys.executable, "-S", "-W", "ignore::SyntaxWarning", "-c", code],
-            input=stdin_data,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-        actual = result.stdout.strip()
-        expected = expected_stdout.strip()
-        passed = (actual == expected)
-
-        return {
-            "passed": passed,
-            "actual_output": actual,
-            "expected_output": expected,
-            "error": result.stderr.strip() if result.returncode != 0 else None,
-            "timeout": False,
-        }
-    except subprocess.TimeoutExpired:
-        return {
-            "passed": False,
-            "actual_output": "",
-            "expected_output": expected_stdout.strip(),
-            "error": "Execution timed out",
-            "timeout": True,
-        }
-    except Exception as e:
-        return {
-            "passed": False,
-            "actual_output": "",
-            "expected_output": expected_stdout.strip(),
-            "error": str(e),
-            "timeout": False,
-        }
-
+# ---------------------------------------------------------------------------
+# Unified test runner & end-to-end evaluator
+# ---------------------------------------------------------------------------
 
 def run_tests(
     code: str,
@@ -481,7 +368,7 @@ def run_tests(
     if test_type == "stdin_stdout":
         return run_stdin_stdout_tests(code, test_cases, timeout)
 
-    # String → try JSON parse first.
+    # String -> try JSON parse first.
     if isinstance(test_cases, str):
         stripped = test_cases.strip()
         if stripped.startswith("{") or stripped.startswith("["):
@@ -501,7 +388,7 @@ def run_tests(
                 pass
         return run_assert_tests(code, stripped, timeout)
 
-    # List of strings → assert mode; list of dicts → stdin/stdout mode.
+    # List of strings -> assert mode; list of dicts -> stdin/stdout mode.
     if isinstance(test_cases, list) and test_cases:
         if isinstance(test_cases[0], dict):
             return run_stdin_stdout_tests(code, test_cases, timeout)
@@ -523,7 +410,7 @@ def evaluate_code_response(
     timeout: float = 10.0,
     test_type: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """End-to-end evaluation: extract code → check syntax → run tests."""
+    """End-to-end evaluation: extract code -> check syntax -> run tests."""
 
     def _result(code, syntax_valid, syntax_error, test_result,
                 format_reward, answer_reward, partial_reward):

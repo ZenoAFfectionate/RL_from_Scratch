@@ -175,11 +175,22 @@ class SFT4ReasTrainer:
 
         load_policy_into_vllm_instance(self.model, self.valid_model)
         output_path = f"../results/sft4{self.args.dataset}.jsonl"
-        acc = evaluate_vllm(self.valid_model, self.reward_fun, self.valid_problems,
+        metrics = evaluate_vllm(self.valid_model, self.reward_fun, self.valid_problems,
                             self.valid_solutions, self.valid_sampling_params, output_path)
 
         self.model.train()
-        self._log(f"  [Validation] Accuracy: {acc:.2f}%")
+
+        wandb.log({
+            "valid/accuracy": metrics["accuracy"],
+            "valid/format_accuracy": metrics["format_accuracy"],
+            "valid/answer_accuracy": metrics["answer_accuracy"],
+            "train_step": self.train_step_count,
+        })
+        self._log(
+            f"  [Validation] Accuracy: {metrics['accuracy']:.2f}%, "
+            f"Format: {metrics['format_accuracy']:.2f}%, "
+            f"Answer: {metrics['answer_accuracy']:.2f}%"
+        )
 
 
     def train(self):

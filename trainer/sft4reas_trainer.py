@@ -7,7 +7,7 @@ import argparse
 
 import torch
 from torch.optim import AdamW
-from transformers import get_cosine_schedule_with_warmup
+from torch.optim.lr_scheduler import LambdaLR
 
 # Add parent directory to path for imports
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -25,14 +25,14 @@ if __name__ == "__main__":
     parser.add_argument("--dataset", type=str, default="math", choices=["math", "gsmk", "code"])
 
 
-    parser.add_argument("--lr", type=float, default=2e-5)
+    parser.add_argument("--lr", type=float, default=5e-6)
     parser.add_argument("--epochs", type=int, default=2)
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--micro_batch", type=int, default=2)
     parser.add_argument("--clip_grad_norm", type=float, default=1.0)
 
     parser.add_argument("--top_p", type=float, default=1.0, help="Top-p sampling probability.")
-    parser.add_argument("--temperature", type=float, default=1.0, help="Sampling temperature.")
+    parser.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature.")
     parser.add_argument("--max_tokens", type=int, default=8192, help="Maximum number of tokens.")
 
     parser.add_argument("--seed", type=int, default=42)
@@ -86,16 +86,21 @@ if __name__ == "__main__":
     grad_accum_steps = args.batch_size // args.micro_batch
     micro_batch_per_epoch = math.ceil(len(train_data) / args.micro_batch)
     training_steps = args.epochs * (micro_batch_per_epoch // grad_accum_steps)
-    scheduler = get_cosine_schedule_with_warmup(
-        optimizer,
-        num_warmup_steps=int(0.05*training_steps),
-        num_training_steps=training_steps,
-    )
+    warmup_steps = int(0.10 * training_steps)
+    min_lr_ratio = 0.1  # LR floor at 10% of peak to avoid wasted tail steps
+
+    def _cosine_with_floor(current_step):
+        if current_step < warmup_steps:
+            return float(current_step) / float(max(1, warmup_steps))
+        progress = float(current_step - warmup_steps) / float(max(1, training_steps - warmup_steps))
+        return max(min_lr_ratio, 0.5 * (1.0 + math.cos(math.pi * progress)))
+
+    scheduler = LambdaLR(optimizer, lr_lambda=_cosine_with_floor)
 
     print("Initializing validation model...")
     valid_model = init_vllm(args.model_id, args.valid_device, args.seed)
     valid_sampling_params = SamplingParams(
-        temperature=0.0,
+        temperature=args.temperature,
         top_p=args.top_p,
         max_tokens=args.max_tokens,
         stop=["</answer>", "</solution>"],

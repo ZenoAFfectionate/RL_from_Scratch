@@ -103,7 +103,7 @@ def dsr1_reward_fn(response, ground_truth, fast=False):
       - answer_reward:  1.0 if the extracted answer matches ground_truth, 0.0 otherwise.
       - reward:         1.0 only when both formatted AND correct, 0.0 otherwise.
     """
-    if re.search(r"</think>\s*<answer>", response) and "</answer>" in response:
+    if re.search(r"</think>.*?<answer>", response, re.DOTALL) and "</answer>" in response:
         model_answer = response.split("<answer>")[-1].replace("</answer>", "")
         #
         if "\\boxed" in model_answer:

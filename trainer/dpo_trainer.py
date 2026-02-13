@@ -23,11 +23,11 @@ if __name__ == "__main__":
     parser.add_argument("--model_id", type=str, default="Qwen/Qwen3-1.7B")
     parser.add_argument("--dataset", type=str, default="rlhf", choices=["rlhf"])
     # DPO hyperparameters:
-    parser.add_argument("--beta", type=float, default=0.1, help="DPO temperature parameter.")
-    parser.add_argument("--epochs", type=int, default=1, help="Number of training epochs.")
-    parser.add_argument("--lr", type=float, default=1e-6, help="Learning rate.")
+    parser.add_argument("--beta", type=float, default=0.2, help="DPO temperature parameter.")
+    parser.add_argument("--epochs", type=int, default=2, help="Number of training epochs.")
+    parser.add_argument("--lr", type=float, default=5e-6, help="Learning rate.")
     parser.add_argument("--batch_size", type=int, default=32, help="Total batch size.")
-    parser.add_argument("--micro_batch", type=int, default=2, help="Micro batch size.")
+    parser.add_argument("--micro_batch", type=int, default=4, help="Micro batch size.")
     parser.add_argument("--clip_grad_norm", type=float, default=1.0, help="Gradient clipping value.")
     parser.add_argument("--max_length", type=int, default=2048, help="Max sequence length.")
     # logging and saving:
@@ -65,6 +65,7 @@ if __name__ == "__main__":
     # ----------------------------------
     print(f">>> Initializing Policy Model: {args.model_id}")
     policy_model, tokenizer = init_policy(args.model_id, args.policy_device)
+    policy_model.gradient_checkpointing_enable()
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -74,7 +75,7 @@ if __name__ == "__main__":
     for param in reference_model.parameters():
         param.requires_grad = False
 
-    optimizer = AdamW(policy_model.parameters(), lr=args.lr, weight_decay=0.0, betas=(0.9, 0.95), fused=True)
+    optimizer = AdamW(policy_model.parameters(), lr=args.lr, weight_decay=0.01, betas=(0.9, 0.95), fused=True)
 
     gradient_accumulation_steps = args.batch_size // args.micro_batch
     total_micro_batches = len(train_dataset) // args.micro_batch

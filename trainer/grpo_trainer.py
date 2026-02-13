@@ -6,7 +6,7 @@ import argparse
 
 import torch
 from torch.optim import AdamW
-from transformers import get_cosine_schedule_with_warmup
+from torch.optim.lr_scheduler import LambdaLR
 
 # Add parent directory to path for imports
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -28,7 +28,7 @@ if __name__ == "__main__":
     # GRPO hyperparameters:
     parser.add_argument("--lr", type=float, default=5e-6)
     parser.add_argument("--num_iterations", type=int, default=250, help="Number of GRPO steps.")
-    parser.add_argument("--rollout_epochs", type=int, default=2, help="Epochs per rollout batch.")
+    parser.add_argument("--rollout_epochs", type=int, default=1, help="Epochs per rollout batch.")
     parser.add_argument("--batch_size",  type=int, default=32, help="Total rollout batch size.")
     parser.add_argument("--micro_batch", type=int, default=2, help="Micro batch size.")
     parser.add_argument("--num_generations", type=int, default=8, help="Responses per prompt.")
@@ -38,7 +38,7 @@ if __name__ == "__main__":
     parser.add_argument("--clip_grad_norm", type=float, default=1.0)
 
     parser.add_argument("--sampling_temperature", type=float, default=0.8)
-    parser.add_argument("--max_generation_length", type=int, default=4096)
+    parser.add_argument("--max_generation_length", type=int, default=3072)
 
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--log_interval", type=int, default=10)
@@ -82,12 +82,10 @@ if __name__ == "__main__":
     
     optimizer = AdamW(policy.parameters(), lr=args.lr, weight_decay=0.0, betas=(0.9, 0.95), fused=True)
 
-    training_steps = args.num_iterations * args.rollout_epochs
-    scheduler = get_cosine_schedule_with_warmup(
-        optimizer,
-        num_warmup_steps=int(0.05*training_steps),
-        num_training_steps=training_steps,
-    )
+    # Constant LR: RL algorithms use clipping + KL penalty to control
+    # update magnitude, so cosine decay is unnecessary and can hurt
+    # learning in later iterations when the data distribution shifts.
+    scheduler = LambdaLR(optimizer, lr_lambda=lambda _: 1.0)
 
     print("Initializing validation model...")
     valid_model = init_vllm(args.model_id, args.valid_device, args.seed)

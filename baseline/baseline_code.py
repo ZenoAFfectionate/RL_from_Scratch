@@ -30,7 +30,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature.")
     parser.add_argument("--top_p", type=float, default=1.0, help="Top-p (nucleus) sampling.")
-    parser.add_argument("--max_tokens", type=int, default=8192, help="Max tokens to generate.")
+    parser.add_argument("--max_tokens", type=int, default=4096, help="Max tokens to generate.")
 
     args = parser.parse_args()
 
@@ -65,7 +65,7 @@ if __name__ == "__main__":
     vllm_model = LLM(
         model=args.model_name,
         trust_remote_code=True,
-        max_model_len=4096,
+        max_model_len=args.max_tokens,
     )
     sampling_params = SamplingParams(
         temperature=args.temperature,
