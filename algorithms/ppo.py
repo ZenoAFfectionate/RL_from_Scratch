@@ -70,15 +70,16 @@ class PPO_Trainer:
         exceeds a configurable threshold (``target_kl``).
     """
 
-    def __init__(self, train_model, valid_model, tokenizer, reward_func, 
-                 optimizer, scheduler, train_dataset, valid_dataset, args):
+    def __init__(self, train_model, valid_model, tokenizer,
+                 optimizer, scheduler, train_dataset, valid_dataset, args,
+                 reward_fun, **kwargs):
         # model and dataset:
         self.model = train_model
         self.valid_model = valid_model
         self.tokenizer = tokenizer
         self.optimizer = optimizer
         self.scheduler = scheduler
-        self.reward_func = reward_func
+        self.reward_fun = reward_fun
         self.train_dataset = train_dataset
         self.valid_dataset = valid_dataset
         self.train_device = args.train_device
@@ -99,8 +100,7 @@ class PPO_Trainer:
         self.target_kl = args.target_kl
         self.log_interval = args.log_interval
         self.val_interval = args.val_interval
-        self.problem_key = getattr(args, "problem_key", "problem")
-        self.solution_key = getattr(args, "solution_key", "solution")
+        self.output_dir = args.output_dir + f"4{args.dataset}"
 
         wandb_project = getattr(args, "wandb_project", "PPO-MATH")
         self.wandb_config = vars(args) if hasattr(args, "__dict__") else {}
@@ -148,7 +148,7 @@ class PPO_Trainer:
             max_tokens=args.max_generation_length,
             stop=["</answer>", "</solution>"],
             include_stop_str_in_output=True,
-            n=self.num_generations,
+            n=1,
         )
         self.eval_sampling_params = SamplingParams(
             temperature=0.0,
@@ -157,8 +157,8 @@ class PPO_Trainer:
             include_stop_str_in_output=True,
         )
 
-        os.makedirs(self.args.output_dir, exist_ok=True)
-        self.record_path = os.path.join(self.args.output_dir, "record.txt")
+        os.makedirs(self.output_dir, exist_ok=True)
+        self.record_path = os.path.join(self.output_dir, "record.txt")
         with open(self.record_path, "w") as f:
             f.write(f"PPO Training Record — {datetime.now()}\n")
             f.write("=" * 60 + "\n\n")
@@ -175,7 +175,7 @@ class PPO_Trainer:
     def _format_prompt(self, question: str) -> str:
         """Apply the prompt template to a raw question string."""
         if self.prompt_template is not None:
-            return self.prompt_template.format(question=question)
+            return self.prompt_template.format(problem=question)
         return question
 
     def _build_attention_mask(self, input_ids):
@@ -196,10 +196,13 @@ class PPO_Trainer:
         load_policy_into_vllm_instance(self.model, self.valid_model)
 
         prompts = [
-            self._format_prompt(item[self.problem_key])
+            self._format_prompt(item["problem"])
             for item in batch_items
         ]
-        grounds = [item[self.solution_key] for item in batch_items]
+        if self.args.dataset == "code":
+            grounds = [item["test"] for item in batch_items]
+        else:
+            grounds = [item["solution"] for item in batch_items]
 
         rollout_outputs = self.valid_model.generate(
             prompts, self.rollout_sampling_params, use_tqdm=True)
@@ -244,11 +247,8 @@ class PPO_Trainer:
 
 
     def compute_rewards(self, flat_responses, ground_truths):
-        """Score each generated response using the reward function."""
-        rewards = [
-            self.reward_func(r, g)
-            for r, g in zip(flat_responses, ground_truths)
-        ]
+        """Score each generated response using the batch reward function."""
+        rewards = self.reward_fun(flat_responses, ground_truths)
         raw_rewards = torch.tensor(
             [res["reward"] for res in rewards], dtype=torch.float32
         )
@@ -702,19 +702,21 @@ class PPO_Trainer:
         load_policy_into_vllm_instance(self.model, self.valid_model)
 
         prompts = [
-            self._format_prompt(item[self.problem_key])
+            self._format_prompt(item["problem"])
             for item in self.valid_dataset
         ]
-        solutions = [
-            item[self.solution_key] for item in self.valid_dataset
-        ]
+        if self.args.dataset == "code":
+            solutions = [item["test"] for item in self.valid_dataset]
+        else:
+            solutions = [item["solution"] for item in self.valid_dataset]
 
         metrics = evaluate_vllm(
             self.valid_model,
-            self.reward_func,
+            self.reward_fun,
             prompts,
             solutions,
             self.eval_sampling_params,
+            f'../results/ppo4{self.args.dataset}.jsonl',
         )
 
         acc = metrics["accuracy"]
@@ -813,13 +815,13 @@ class PPO_Trainer:
 
         # Lightweight policy-only checkpoint (for inference / deployment)
         policy_path = os.path.join(
-            self.args.output_dir, f"ppo_policy_{suffix}.pt"
+            self.output_dir, f"ppo_policy_{suffix}.pt"
         )
         torch.save(state_dict, policy_path)
 
         # Full training state (includes value head; no redundant copy)
         full_path = os.path.join(
-            self.args.output_dir, f"ppo_{suffix}_full.pt"
+            self.output_dir, f"ppo_{suffix}_full.pt"
         )
         save_dict = {
             "global_step": self.global_step,

@@ -71,7 +71,11 @@ if __name__ == "__main__":
 
     # initialize model by means of vLLM
     print(f"Initializing vLLM with model: {args.model_name}")
-    vllm_model = LLM(model=args.model_name, trust_remote_code=True, max_model_len=4096)
+    vllm_model = LLM(
+        model=args.model_name, 
+        trust_remote_code=True, 
+        max_model_len=32768
+    )
     
     sampling_params = SamplingParams(
         temperature=args.temperature,
@@ -84,9 +88,9 @@ if __name__ == "__main__":
     # evaluate the model
     evaluate_vllm(
         vllm_model=vllm_model,
-        reward_fn=mmlu_reward_fn, 
-        prompts=prompts,       # 
-        answers=ground_truth,  # 
+        reward_fn=mmlu_reward_fn,
+        prompts=prompts,
+        answers=ground_truth,
         eval_sampling_params=sampling_params,
         output_filepath=f"../results/baseline_mmlu.jsonl"
     )

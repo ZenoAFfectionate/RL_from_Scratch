@@ -27,12 +27,12 @@ def format_gsmk_prompt(example, prompt_template):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate a VLLM model on GSM8K (Zero-shot).")
     
-    parser.add_argument("--model_name", type=str, default="Qwen/Qwen3-1.7B",)
+    parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-Math-1.5B")  # Qwen/Qwen3-1.7B
     parser.add_argument("--dataset_name", type=str, default="gsmk")
 
     parser.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature.")
     parser.add_argument("--top_p", type=float, default=1.0, help="Top-p sampling.")
-    parser.add_argument("--max_tokens", type=int, default=512, help="Maximum number of tokens to generate.")
+    parser.add_argument("--max_tokens", type=int, default=2048, help="Maximum number of tokens to generate.")
 
     args = parser.parse_args()
 
@@ -62,22 +62,26 @@ if __name__ == "__main__":
 
     # initialize model by means of vLLM
     print(f"Initializing vLLM with model: {args.model_name}")
-    vllm_model = LLM(model=args.model_name, trust_remote_code=True, max_model_len=4096)
+    vllm_model = LLM(
+        model=args.model_name, 
+        trust_remote_code=True, 
+        max_model_len=32768
+    )
     
     sampling_params = SamplingParams(
         temperature=args.temperature,
         top_p=args.top_p,
         max_tokens=args.max_tokens,
-        stop=["\n", "Question:"], 
+        stop=["Question:", "---"],
         include_stop_str_in_output=False
     )
     
     # evaluate the model
     evaluate_vllm(
         vllm_model=vllm_model,
-        reward_fn=gsmk_reward_fn, 
-        prompts=prompts,       # 
-        answers=ground_truth,  # 
+        reward_fn=gsmk_reward_fn,
+        prompts=prompts,
+        answers=ground_truth,
         eval_sampling_params=sampling_params,
         output_filepath=f"../results/baseline_gsmk.jsonl"
     )

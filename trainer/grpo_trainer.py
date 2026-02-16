@@ -13,7 +13,7 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
 sys.path.insert(0, project_root)
 
-from utils.rewards import *
+from utils.rewards import dsr1_reward_fn, gsmk_reward_fn, code_reward_fn
 from utils.vllm_helper import init_policy, init_vllm
 from algorithms.grpo import GRPO_Trainer
 
@@ -23,22 +23,22 @@ if __name__ == "__main__":
 
     parser.add_argument("--model_id", type=str, default="Qwen/Qwen2.5-Math-1.5B")
     parser.add_argument("--dataset", type=str, default="math", choices=["math", "code"])
-    parser.add_argument("--solution_key", type=str, default="solution")
+
 
     # GRPO hyperparameters:
     parser.add_argument("--lr", type=float, default=5e-6)
     parser.add_argument("--num_iterations", type=int, default=250, help="Number of GRPO steps.")
-    parser.add_argument("--rollout_epochs", type=int, default=1, help="Epochs per rollout batch.")
+    parser.add_argument("--rollout_epochs", type=int, default=2, help="Epochs per rollout batch.")
     parser.add_argument("--batch_size",  type=int, default=32, help="Total rollout batch size.")
     parser.add_argument("--micro_batch", type=int, default=2, help="Micro batch size.")
     parser.add_argument("--num_generations", type=int, default=8, help="Responses per prompt.")
-    parser.add_argument("--beta", type=float, default=0.02, help="KL penalty coefficient.")
+    parser.add_argument("--beta", type=float, default=0.01, help="KL penalty coefficient.")
     parser.add_argument("--clip_eps", type=float, default=0.2, help="PPO-style clipping range.")
     parser.add_argument("--advantage_eps", type=float, default=1e-6)
     parser.add_argument("--clip_grad_norm", type=float, default=1.0)
 
     parser.add_argument("--sampling_temperature", type=float, default=0.8)
-    parser.add_argument("--max_generation_length", type=int, default=3072)
+    parser.add_argument("--max_generation_length", type=int, default=4096)
 
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--log_interval", type=int, default=10)
@@ -46,6 +46,8 @@ if __name__ == "__main__":
     parser.add_argument("--train_device", type=str, default="cuda:0")
     parser.add_argument("--valid_device", type=str, default="cuda:1")
     parser.add_argument("--output_dir", type=str, default="../checkpoints/GRPO")
+    parser.add_argument("--init_checkpoint", type=str, default=None,
+                        help="Path to a .pt state_dict to warm-start the policy (e.g., SFT checkpoint).")
 
     parser.add_argument("--wandb_project", type=str, default="GRPO-MATH")
 
@@ -65,7 +67,7 @@ if __name__ == "__main__":
     with open(f'../data/{args.dataset}/valid.jsonl', "r") as f:
         valid_data = [json.loads(line) for line in f]
 
-    reward_fun = {
+    reward_fn = {
         "math": dsr1_reward_fn,
         "gsmk": gsmk_reward_fn,
         "code": code_reward_fn,
@@ -79,6 +81,14 @@ if __name__ == "__main__":
     policy, tokenizer = init_policy(args.model_id, args.train_device)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
+
+    # Load SFT checkpoint if provided (warm-start)
+    if args.init_checkpoint is not None:
+        print(f">>> Loading initial checkpoint: {args.init_checkpoint}")
+        state_dict = torch.load(args.init_checkpoint, map_location=args.train_device)
+        policy.load_state_dict(state_dict)
+        del state_dict
+        print("    Checkpoint loaded successfully.")
     
     optimizer = AdamW(policy.parameters(), lr=args.lr, weight_decay=0.0, betas=(0.9, 0.95), fused=True)
 
@@ -97,11 +107,11 @@ if __name__ == "__main__":
         train_model=policy,
         valid_model=valid_model,
         tokenizer=tokenizer,
-        reward_fun=reward_fun,
         optimizer=optimizer,
         scheduler=scheduler,
         train_dataset=train_data,
         valid_dataset=valid_data,
         args=args,
+        reward_fun=reward_fn,
     )
     trainer.train()

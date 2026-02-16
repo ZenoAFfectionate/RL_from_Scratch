@@ -11,6 +11,8 @@ import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+from tqdm import tqdm
+
 
 # Pre-compiled regex patterns for code extraction.
 _FENCE_RE = re.compile(r"```(?:python|py)?\s*\n(.*?)```", re.DOTALL | re.IGNORECASE)
@@ -45,6 +47,8 @@ def extract_code_from_response(response: str) -> Optional[str]:
     cleaned = _THINK_RE.sub("", response).strip()
     # Strip orphan closing tags left over when the opening tag was in the prompt
     cleaned = re.sub(r"</solution>\s*$", "", cleaned).strip()
+    # Strip orphan closing code fences (no matching opening fence)
+    cleaned = re.sub(r"```\s*$", "", cleaned).strip()
     return cleaned or response.strip() or None
 
 
@@ -92,6 +96,9 @@ def _make_summary(details: List[Dict[str, Any]], total: int) -> Dict[str, Any]:
     }
 
 
+_MAX_CAPTURE = 20 * 1024 * 1024  # 10 MB cap on captured stdout/stderr
+
+
 def _safe_subprocess_run(
     args: List[str],
     input_data: Optional[str] = None,
@@ -115,6 +122,9 @@ def _safe_subprocess_run(
     )
     try:
         stdout, stderr = proc.communicate(input=input_data, timeout=timeout)
+        # Truncate to avoid OOM from excessive subprocess output
+        stdout = stdout[:_MAX_CAPTURE]
+        stderr = stderr[:_MAX_CAPTURE]
         return stdout, stderr, proc.returncode, False
     except subprocess.TimeoutExpired:
         _kill_proc_group(proc)
@@ -231,12 +241,42 @@ def run_assert_tests(code: str, test_list: Union[str, List[str]],
 # Stdin/stdout-based tests (APPS / CodeContests style)
 # ---------------------------------------------------------------------------
 
+_STDIN_STDOUT_WRAPPER = textwrap.dedent(r'''
+import sys, resource, warnings
+warnings.filterwarnings("ignore", category=SyntaxWarning)
+
+MAX_MEM = {max_memory}
+MAX_CPU = {cpu_timeout}
+try:
+    resource.setrlimit(resource.RLIMIT_AS, (MAX_MEM, MAX_MEM))
+except Exception:
+    pass
+try:
+    resource.setrlimit(resource.RLIMIT_CPU, (MAX_CPU, MAX_CPU))
+except Exception:
+    pass
+
+_MAX_OUTPUT = {max_output}
+_code = {code_repr}
+exec(compile(_code, "<candidate>", "exec"))
+''')
+
+
 def _run_stdin_stdout_single(
-    code: str, stdin_data: str, expected_stdout: str, timeout: float
+    code: str, stdin_data: str, expected_stdout: str, timeout: float,
+    max_memory: int = 512 * 1024 * 1024,
+    cpu_timeout: int = 10,
+    max_output: int = 10 * 1024 * 1024,
 ) -> Dict[str, Any]:
     """Execute *code* with *stdin_data* and compare stdout to *expected_stdout*."""
+    script = _STDIN_STDOUT_WRAPPER.format(
+        code_repr=repr(code),
+        max_memory=max_memory,
+        cpu_timeout=cpu_timeout,
+        max_output=max_output,
+    )
     stdout, stderr, rc, timed_out = _safe_subprocess_run(
-        [sys.executable, "-S", "-W", "ignore::SyntaxWarning", "-c", code],
+        [sys.executable, "-S", "-W", "ignore::SyntaxWarning", "-c", script],
         input_data=stdin_data,
         timeout=timeout,
     )
@@ -318,35 +358,14 @@ def run_stdin_stdout_tests(
         norm_inputs.append(inp)
         norm_outputs.append(expected_out)
 
-    # Parallel execution using threads.  Each thread spawns an isolated
-    # subprocess (via _safe_subprocess_run), so threads provide real
-    # parallelism because the GIL is released during subprocess I/O.
-    if len(norm_inputs) > 1:
-        max_workers = min(os.cpu_count() or 4, 8)
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {
-                executor.submit(
-                    _run_stdin_stdout_single, code, inp, exp, timeout
-                ): i
-                for i, (inp, exp) in enumerate(zip(norm_inputs, norm_outputs))
-            }
-            indexed_results: Dict[int, Dict[str, Any]] = {}
-            for future in as_completed(futures):
-                idx = futures[future]
-                try:
-                    indexed_results[idx] = future.result()
-                except Exception as e:
-                    indexed_results[idx] = {
-                        "passed": False, "actual_output": "",
-                        "expected_output": norm_outputs[idx].strip(),
-                        "error": str(e), "timeout": False,
-                    }
-            details = [indexed_results[i] for i in range(len(norm_inputs))]
-    else:
-        details = [
-            _run_stdin_stdout_single(code, inp, exp, timeout)
-            for inp, exp in zip(norm_inputs, norm_outputs)
-        ]
+    # Run test cases sequentially.  The outer evaluate_code_response()
+    # already parallelises across responses, so nested thread pools here
+    # would cause a subprocess explosion (16 outer × 8 inner = 128
+    # simultaneous Python processes, each ~40-50 MB RSS).
+    details = [
+        _run_stdin_stdout_single(code, inp, exp, timeout)
+        for inp, exp in zip(norm_inputs, norm_outputs)
+    ]
 
     total = len(norm_inputs)
     return _make_summary(details, total)
@@ -404,13 +423,13 @@ def run_tests(
     }
 
 
-def evaluate_code_response(
+def _evaluate_single(
     response: str,
     test_cases: Any,
     timeout: float = 10.0,
     test_type: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """End-to-end evaluation: extract code -> check syntax -> run tests."""
+    """End-to-end evaluation of a single response: extract code -> check syntax -> run tests."""
 
     def _result(code, syntax_valid, syntax_error, test_result,
                 format_reward, answer_reward, partial_reward):
@@ -438,3 +457,66 @@ def evaluate_code_response(
     answer = 1.0 if all_passed else 0.0
 
     return _result(code, True, None, test_result, 1.0, answer, partial)
+
+
+def evaluate_code_response(
+    responses: List[str],
+    test_cases_list: List[Any],
+    timeout: float = 10.0,
+    test_type: Optional[str] = None,
+    max_workers: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """Evaluate multiple code responses in parallel using a thread pool.
+
+    Each evaluation still runs in its own isolated subprocess, so thread-
+    level parallelism is real (the GIL is released during subprocess I/O).
+    This avoids the 256-sequential-subprocess bottleneck that dominates
+    wall-clock time in GRPO training loops.
+
+    Parameters
+    ----------
+    responses : list of str
+        Model-generated responses (one per problem/generation).
+    test_cases_list : list
+        Corresponding test cases for each response.
+    timeout : float
+        Per-evaluation wall-clock timeout in seconds.
+    test_type : str or None
+        Force "assert" or "stdin_stdout"; ``None`` for auto-detect.
+    max_workers : int or None
+        Thread-pool size.  Defaults to ``min(cpu_count, 16)``.
+    """
+    assert len(responses) == len(test_cases_list)
+
+    if max_workers is None:
+        max_workers = min(os.cpu_count() or 4, 16)
+
+    # Fast path: skip thread-pool overhead for tiny batches.
+    if len(responses) <= 2:
+        return [
+            _evaluate_single(r, tc, timeout=timeout, test_type=test_type)
+            for r, tc in zip(responses, test_cases_list)
+        ]
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(
+                _evaluate_single, resp, tc, timeout, test_type
+            ): idx
+            for idx, (resp, tc) in enumerate(zip(responses, test_cases_list))
+        }
+        indexed: Dict[int, Dict[str, Any]] = {}
+        with tqdm(total=len(futures), desc="Code Reward") as pbar:
+            for future in as_completed(futures):
+                idx = futures[future]
+                try:
+                    indexed[idx] = future.result()
+                except Exception as e:
+                    indexed[idx] = {
+                        "code": None, "syntax_valid": False,
+                        "syntax_error": str(e), "test_result": None,
+                        "format_reward": 0.0, "answer_reward": 0.0,
+                        "partial_reward": 0.0, "reward": 0.0,
+                    }
+                pbar.update(1)
+        return [indexed[i] for i in range(len(responses))]

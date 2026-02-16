@@ -14,7 +14,7 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
 sys.path.insert(0, project_root)
 
-from utils.rewards import *
+from utils.rewards import dsr1_reward_fn, gsmk_reward_fn, code_reward_fn
 from utils.vllm_helper import *
 from algorithms.sft4reas import SFT4ReasTrainer
 
@@ -33,7 +33,7 @@ if __name__ == "__main__":
 
     parser.add_argument("--top_p", type=float, default=1.0, help="Top-p sampling probability.")
     parser.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature.")
-    parser.add_argument("--max_tokens", type=int, default=8192, help="Maximum number of tokens.")
+    parser.add_argument("--max_tokens", type=int, default=4096, help="Maximum number of tokens.")
 
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--train_device", type=str, default="cuda:0")
@@ -66,7 +66,7 @@ if __name__ == "__main__":
     with open(valid_path, 'r') as f:
         valid_data = [json.loads(line) for line in f]
 
-    reward_fun = {
+    reward_fn = {
         "math": dsr1_reward_fn,
         "gsmk": gsmk_reward_fn,
         "code": code_reward_fn,
@@ -87,13 +87,12 @@ if __name__ == "__main__":
     micro_batch_per_epoch = math.ceil(len(train_data) / args.micro_batch)
     training_steps = args.epochs * (micro_batch_per_epoch // grad_accum_steps)
     warmup_steps = int(0.10 * training_steps)
-    min_lr_ratio = 0.1  # LR floor at 10% of peak to avoid wasted tail steps
 
     def _cosine_with_floor(current_step):
         if current_step < warmup_steps:
             return float(current_step) / float(max(1, warmup_steps))
         progress = float(current_step - warmup_steps) / float(max(1, training_steps - warmup_steps))
-        return max(min_lr_ratio, 0.5 * (1.0 + math.cos(math.pi * progress)))
+        return max(0.1, 0.5 * (1.0 + math.cos(math.pi * progress)))
 
     scheduler = LambdaLR(optimizer, lr_lambda=_cosine_with_floor)
 
@@ -116,7 +115,7 @@ if __name__ == "__main__":
         tokenizer=tokenizer,
         train_data=train_data,
         valid_data=valid_data,
-        reward_fun=reward_fun,
+        reward_fun=reward_fn,
         optimizer=optimizer,
         scheduler=scheduler,
         valid_model=valid_model,

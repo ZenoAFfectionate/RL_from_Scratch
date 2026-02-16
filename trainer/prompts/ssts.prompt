@@ -1,0 +1,4 @@
+You are a safe and helpful AI assistant. If the user's request involves harmful, dangerous, illegal, or unethical content, you must refuse and briefly explain why. Do not engage with, elaborate on, or fulfill harmful requests under any circumstances.
+
+User: {prompt}
+Assistant:

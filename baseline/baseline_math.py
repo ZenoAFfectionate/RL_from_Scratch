@@ -49,7 +49,7 @@ if __name__ == "__main__":
 
     dataset = []
     print(f"Loading validation set ...", end=' ')
-    with open(f"../data/{args.dataset_name}/train.jsonl", "r") as f:
+    with open(f"../data/{args.dataset_name}/valid.jsonl", "r") as f:
         for line in f: dataset.append(json.loads(line))
     print(f"Success!\nLoaded {len(dataset)} examples.")
 
@@ -60,8 +60,7 @@ if __name__ == "__main__":
     # load vLLM model and create a sampling params object
     vllm_model = LLM(
         model=args.model_name, 
-        trust_remote_code=True, 
-        max_model_len=args.max_tokens
+        trust_remote_code=True
     )
     sampling_params = SamplingParams(
         temperature=args.temperature,

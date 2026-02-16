@@ -1,4 +1,5 @@
 import os
+import gc
 import tqdm
 import json
 import torch
@@ -63,23 +64,45 @@ def load_policy_into_vllm_instance(policy: PreTrainedModel, llm: LLM):
 
 def evaluate_vllm(
     vllm_model: LLM,
-    reward_fn: Callable[[str, str], dict[str, float]],
+    reward_fn: Callable,
     prompts: List[str],  # questions with prompt template
     answers: List[str],  # ground truth answers
     eval_sampling_params: SamplingParams,
-    output_filepath: str = ""
+    output_filepath: str = "",
 ) -> dict:
     """
     Evaluate a language model on a list of prompts,
     compute evaluation metrics, and serialize results to disk.
+
+    Parameters
+    ----------
+    reward_fn : callable
+        ``(responses: list[str], ground_truths: list) -> list[dict]``
+        Batch reward function with a uniform interface for all dataset
+        types (math, code, gsm8k, …).
 
     Returns a dict with keys: accuracy, format_accuracy, answer_accuracy.
     """
     # generate outputs for each example using the vLLM engine
     print(f"\nGenerating responses for {len(prompts)} problems...")
     outputs = vllm_model.generate(prompts, eval_sampling_params)
-    max_output_len = max(len(out.outputs[0].text.split()) for out in outputs)
-    print(f"✅ Generation complete, max output length: {max_output_len} tokens.")
+
+    # compute per-sample token statistics (prompt + response)
+    prompt_lens = [len(out.prompt_token_ids) for out in outputs]
+    response_lens = [len(out.outputs[0].token_ids) for out in outputs]
+    total_lens = [p + r for p, r in zip(prompt_lens, response_lens)]
+    max_idx = max(range(len(total_lens)), key=lambda i: total_lens[i])
+    print(f"✅ Generation complete.")
+    print(f"  Prompt  tokens — max: {max(prompt_lens)}, "
+          f"min: {min(prompt_lens)}, avg: {sum(prompt_lens)/len(prompt_lens):.0f}")
+    print(f"  Response tokens — max: {max(response_lens)}, "
+          f"min: {min(response_lens)}, avg: {sum(response_lens)/len(response_lens):.0f}")
+    print(f"  Total   tokens — max: {max(total_lens)} (sample #{max_idx}), "
+          f"min: {min(total_lens)}, avg: {sum(total_lens)/len(total_lens):.0f}")
+
+    del vllm_model
+    gc.collect()
+    if torch.cuda.is_available(): torch.cuda.empty_cache()
 
     # prepare to compute metrics
     format_correct = 0
@@ -87,22 +110,18 @@ def evaluate_vllm(
     total_correct = 0
     results = []
 
+    generated_texts = [out.outputs[0].text.strip() for out in outputs]
+
     print("Evaluating responses and computing metrics...")
-    for i, output in enumerate(tqdm(outputs, desc="Evaluating")):
-        prompt_with_question = output.prompt
-        # get the generated text and ground truth
-        generated_text = output.outputs[0].text.strip()
-        ground_truth_answer = answers[i]
-        # use reward function to check for semantic equivalence
-        reward_dict = reward_fn(generated_text, ground_truth_answer)
+    reward_dicts = reward_fn(generated_texts, answers)
+    for i, (output, reward_dict) in enumerate(zip(outputs, reward_dicts)):
         format_correct += int(reward_dict.get("format_reward", 0))
         answer_correct += int(reward_dict.get("answer_reward", 0))
         total_correct += int(reward_dict.get("reward", 0))
-        # store detailed results for this example
         results.append({
-            "prompt": prompt_with_question,       #
-            "response": generated_text,           #
-            "ground_truth": ground_truth_answer,  #
+            "prompt": output.prompt,
+            "response": generated_texts[i],
+            "ground_truth": answers[i],
             "format_reward": reward_dict.get("format_reward", 0),
             "answer_reward": reward_dict.get("answer_reward", 0),
             "is_correct": reward_dict.get("reward", 0)

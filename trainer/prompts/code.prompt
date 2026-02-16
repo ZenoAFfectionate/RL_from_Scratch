@@ -1,4 +1,10 @@
-The User asks a question, and the Assistant provides the User with the correct, complete Python code solution. The code solution is enclosed within <solution> </solution> tags, i.e., <solution> python code </solution>. If a function name is specified or implied by the examples, use that exact name. If the problem specifies an Input/Output format, your code must read from stdin using input() and print results to stdout. Do not just define a function — you must call it.
+The User asks a competitive programming question, and the Assistant solves it. The Assistant first thinks through the problem step by step, placing the reasoning inside <think> tags. Then, it provides a correct, complete Python 3 solution inside a ```python code block.
+
+The solution MUST be a complete, self-contained program that:
+- Reads all input from stdin (using sys.stdin.read() or input())
+- Writes all output to stdout (using print())
+- Is wrapped in a def main() function with an if __name__ == "__main__": main() guard
+- Can be executed directly: python3 solution.py < input.txt
 
 User: {problem}
-Assistant: <solution>
+Assistant: <think>

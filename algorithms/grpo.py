@@ -26,8 +26,9 @@ class GRPO_Trainer:
       4. Evaluate periodically on a held-out validation set
     """
 
-    def __init__(self, train_model, valid_model, tokenizer, reward_fun,
-                 optimizer, scheduler, train_dataset, valid_dataset, args):
+    def __init__(self, train_model, valid_model, tokenizer,
+                 optimizer, scheduler, train_dataset, valid_dataset, args,
+                 reward_fun, **kwargs):
         # model and dataset:
         self.model = train_model
         self.valid_model = valid_model
@@ -51,7 +52,6 @@ class GRPO_Trainer:
         self.advantage_eps = args.advantage_eps
         self.log_interval = args.log_interval
         self.val_interval = args.val_interval
-        self.solution_key = getattr(args, "solution_key", "solution")
         self.output_dir = args.output_dir + f"4{args.dataset}"
 
         wandb_project = getattr(args, "wandb_project", "GRPO-Reasoning")
@@ -111,8 +111,8 @@ class GRPO_Trainer:
         """
         Compute rewards for each group of rollout responses, normalized by the group size.
         """
-        # compute raw rewards based on reward function and reshape to group-wise
-        rewards = [self.reward_fun(r, g) for r, g in zip(rollout_responses, repeated_ground_truths)]
+        # compute raw rewards based on batch reward function and reshape to group-wise
+        rewards = self.reward_fun(rollout_responses, repeated_ground_truths)
         raw_rewards = torch.tensor([res["reward"] for res in rewards], dtype=torch.float32)
 
         # create reward matrix and compute mean for each group
@@ -149,7 +149,10 @@ class GRPO_Trainer:
 
         # build formatted prompts and ground truths
         prompts = [self._format_prompt(item["problem"]) for item in batch_items]
-        grounds = [item[self.solution_key] for item in batch_items]
+        if self.args.dataset == "code":
+            grounds = [item["test"] for item in batch_items]
+        else:
+            grounds = [item["solution"] for item in batch_items]
 
         # generate N responses per prompt
         rollout_outputs = self.valid_model.generate(
@@ -402,7 +405,10 @@ class GRPO_Trainer:
             self._format_prompt(item["problem"])
             for item in self.valid_dataset
         ]
-        solutions = [item[self.solution_key] for item in self.valid_dataset]
+        if self.args.dataset == "code":
+            solutions = [item["test"] for item in self.valid_dataset]
+        else:
+            solutions = [item["solution"] for item in self.valid_dataset]
 
         metrics = evaluate_vllm(
             self.valid_model,
@@ -410,7 +416,7 @@ class GRPO_Trainer:
             prompts,
             solutions,
             self.eval_sampling_params,
-            f'../results/grpo4{self.args.dataset}.jsonl'
+            f'../results/grpo4{self.args.dataset}.jsonl',
         )
 
         acc = metrics["accuracy"]
