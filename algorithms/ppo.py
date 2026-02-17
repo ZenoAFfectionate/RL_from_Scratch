@@ -146,14 +146,14 @@ class PPO_Trainer:
         self.rollout_sampling_params = SamplingParams(
             temperature=args.sampling_temperature,
             max_tokens=args.max_generation_length,
-            stop=["</answer>", "</solution>"],
+            stop=["</answer>", "</solution>", "```"],
             include_stop_str_in_output=True,
             n=1,
         )
         self.eval_sampling_params = SamplingParams(
             temperature=0.0,
             max_tokens=max(args.max_generation_length, 8192),
-            stop=["</answer>", "</solution>"],
+            stop=["</answer>", "</solution>", "```"],
             include_stop_str_in_output=True,
         )
 

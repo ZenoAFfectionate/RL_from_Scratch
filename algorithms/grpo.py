@@ -76,7 +76,7 @@ class GRPO_Trainer:
         self.eval_sampling_params = SamplingParams(
             temperature=0.0,
             max_tokens=max(args.max_generation_length, 8192),
-            stop=["</answer>", "</solution>"],
+            stop=["</answer>", "</solution>", "```"],
             include_stop_str_in_output=True,
         )
 

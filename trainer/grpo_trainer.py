@@ -1,6 +1,5 @@
 import os
 import sys
-import json
 import random
 import argparse
 
@@ -13,9 +12,9 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
 sys.path.insert(0, project_root)
 
-from utils.rewards import dsr1_reward_fn, gsmk_reward_fn, code_reward_fn
 from utils.vllm_helper import init_policy, init_vllm
 from algorithms.grpo import GRPO_Trainer
+from trainer.utils import load_prompt_template, load_jsonl, get_reward_fn
 
 
 if __name__ == "__main__":
@@ -57,21 +56,14 @@ if __name__ == "__main__":
     torch.manual_seed(args.seed)
     random.seed(args.seed)
 
-    print(f">>> Loading prompt template...")
-    with open(f'./prompts/{args.dataset}.prompt', "r") as f:
-        args.prompt_template = f.read()
+    print(f">>> Loading prompt template for {args.dataset}")
+    args.prompt_template = load_prompt_template(args.dataset)
 
     print(">>> Loading training and validation data...")
-    with open(f'../data/{args.dataset}/train.jsonl', "r") as f:
-        train_data = [json.loads(line) for line in f]
-    with open(f'../data/{args.dataset}/valid.jsonl', "r") as f:
-        valid_data = [json.loads(line) for line in f]
+    train_data = load_jsonl(f'../data/{args.dataset}/train.jsonl')
+    valid_data = load_jsonl(f'../data/{args.dataset}/valid.jsonl')
 
-    reward_fn = {
-        "math": dsr1_reward_fn,
-        "gsmk": gsmk_reward_fn,
-        "code": code_reward_fn,
-    }[args.dataset]
+    reward_fn = get_reward_fn(args.dataset)
 
 
     # --------------------------------------------------

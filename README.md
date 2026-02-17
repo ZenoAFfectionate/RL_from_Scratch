@@ -1,22 +1,25 @@
 # LLM Alignment: From Supervised Fine-Tuning to Reinforcement Learning
 
-This project implements a comprehensive framework for aligning Large Language Models (LLMs) with human preferences and task-specific objectives. Built upon the Qwen open-source model family, the framework encompasses supervised fine-tuning (SFT) and reinforcement learning from human feedback (RLHF) algorithms, including Direct Preference Optimization (DPO) and Group Relative Policy Optimization (GRPO). The implementation is evaluated on two distinct tasks: conversational dialogue and mathematical problem-solving, demonstrating the versatility and effectiveness of modern alignment techniques.
+This project implements a comprehensive framework for aligning Large Language Models (LLMs) with human preferences and task-specific objectives. Built upon the Qwen open-source model family, the framework encompasses supervised fine-tuning (SFT) and reinforcement learning from human feedback (RLHF) algorithms, including Direct Preference Optimization (DPO), Group Relative Policy Optimization (GRPO), and Proximal Policy Optimization (PPO). The implementation is evaluated on multiple tasks: conversational dialogue, mathematical problem-solving, code generation, and safety alignment.
 
 ## Overview
 
 - **Foundation Model**: Built on Qwen2.5 series models (Qwen2.5-Math for mathematical reasoning, Qwen3 for dialogue tasks), leveraging state-of-the-art open-source LLM capabilities
 - **Chain-of-Thought Data Construction**: Novel approach to construct reasoning datasets using one-shot prompting and N-sampling with Qwen-Math models, achieving 99.2% accuracy
 - **Supervised Fine-Tuning**: Implements efficient SFT with gradient accumulation, sequence packing, and response masking for both chat and math domains
-- **Reinforcement Learning Algorithms**: Features DPO for preference-based alignment on dialogue tasks and GRPO for reward-based optimization on mathematical reasoning
+- **Reinforcement Learning Algorithms**: Features DPO for preference-based alignment on dialogue tasks, GRPO for reward-based optimization on mathematical reasoning, and PPO for general RL fine-tuning
+- **Dual Training Framework**: Provides two parallel implementations — a custom training loop (`trainer/`) and a HuggingFace TRL-based implementation (`trl_trainer/`) — allowing easy comparison and flexibility
 - **Speculative Decoding**: High-performance inference optimization with vectorized verification, adaptive speculation length, async pipeline, and continuous batching support
-- **Comprehensive Evaluation**: Baseline evaluation scripts for MATH, GSM8K, MMLU, AlpacaEval, and SimpleSafetyTests benchmarks
+- **Comprehensive Evaluation**: Baseline evaluation scripts for MATH, GSM8K, Code, MMLU, AlpacaEval, and SimpleSafetyTests benchmarks
 
 ## Table of Contents
 
+- [Project Structure](#project-structure)
 - [Quick Start](#quick-start)
   - [Running Baseline Evaluations](#running-baseline-evaluations)
-  - [Running Supervised Fine-Tuning](#running-supervised-fine-tuning)
-  - [Running Reinforcement Learning](#running-reinforcement-learning)
+  - [Custom Trainers (trainer/)](#custom-trainers-trainer)
+  - [TRL-based Trainers (trl_trainer/)](#trl-based-trainers-trl_trainer)
+- [Changelog](#changelog)
 - [Math Dataset Construction](#math-dataset-construction)
 - [Supervised Fine-Tuning](#supervised-fine-tuning)
   - [Data Processing](#data-processing-for-sft)
@@ -28,11 +31,85 @@ This project implements a comprehensive framework for aligning Large Language Mo
   - [GRPO Algorithm](#grpo-algorithm)
 - [Speculative Decoding](#speculative-decoding)
 
+## Project Structure
+
+```
+Assignment_5/
+├── algorithms/             # Core algorithm implementations
+│   ├── sft4chat.py         # SFT algorithm for chat
+│   ├── sft4reas.py         # SFT algorithm for reasoning
+│   ├── dpo.py              # DPO algorithm
+│   ├── grpo.py             # GRPO algorithm
+│   ├── ppo.py              # PPO algorithm
+│   ├── speculative.py      # Speculative decoding
+│   └── utils.py            # Shared algorithm utilities
+│
+├── trainer/                # Custom training loop scripts
+│   ├── utils.py            # Shared: prompt loading, data loading, reward functions
+│   ├── sft_trainer.py      # Unified SFT (chat + reasoning modes)
+│   ├── dpo_trainer.py      # DPO trainer
+│   ├── grpo_trainer.py     # GRPO trainer
+│   └── ppo_trainer.py      # PPO trainer
+│
+├── trl_trainer/            # HuggingFace TRL-based training scripts
+│   ├── utils.py            # Shared: prompt loading, reward functions, TRL wrappers
+│   ├── sft_trainer.py      # TRL SFTTrainer (chat + reasoning modes)
+│   ├── dpo_trainer.py      # TRL DPOTrainer
+│   ├── grpo_trainer.py     # TRL GRPOTrainer
+│   └── ppo_trainer.py      # TRL PPOTrainer
+│
+├── baseline/               # Baseline evaluation scripts
+│   ├── baseline_math.py    # MATH benchmark
+│   ├── baseline_gsmk.py    # GSM8K benchmark
+│   ├── baseline_code.py    # Code benchmark
+│   ├── baseline_mmlu.py    # MMLU benchmark
+│   ├── baseline_alpa.py    # AlpacaEval benchmark
+│   └── baseline_ssts.py    # SimpleSafetyTests benchmark
+│
+├── prompts/                # Prompt templates (single source of truth)
+│   ├── math.prompt         # Math reasoning template
+│   ├── code.prompt         # Code generation template
+│   ├── gsmk.prompt         # GSM8K template
+│   ├── rlhf.prompt         # RLHF / chat template
+│   ├── mmlu.prompt         # MMLU template
+│   └── ssts.prompt         # Safety tests template
+│
+├── data/                   # Datasets
+│   ├── math/               # MATH dataset (train.jsonl, valid.jsonl)
+│   ├── gsmk/               # GSM8K dataset
+│   ├── code/               # Code dataset
+│   ├── rlhf/               # RLHF preference data
+│   ├── ultrachat/          # UltraChat dataset
+│   ├── mmlu/               # MMLU dataset
+│   ├── alpa/               # AlpacaEval dataset
+│   ├── ssts/               # SimpleSafetyTests dataset
+│   └── lm_dataset.py       # Dataset utilities
+│
+├── utils/                  # Project-level utilities
+│   ├── rewards.py          # Reward functions (dsr1, gsmk, code)
+│   ├── vllm_helper.py      # vLLM initialization helpers
+│   ├── math_utils.py       # Math evaluation utilities
+│   └── code_utils.py       # Code evaluation utilities
+│
+├── checkpoints/            # Checkpoints from trainer/
+├── [TRL]checkpoints/       # Checkpoints from trl_trainer/
+├── results/                # Evaluation results from trainer/
+├── [TRL]results/           # Evaluation results from trl_trainer/
+└── tests/                  # Unit tests
+```
+
+**Output directory convention:**
+
+| Source | Checkpoints | Results |
+|---|---|---|
+| `trainer/` | `checkpoints/` | `results/` |
+| `trl_trainer/` | `[TRL]checkpoints/` | `[TRL]results/` |
+
 ## Quick Start
 
 ### Running Baseline Evaluations
 
-The `baseline/` folder contains evaluation scripts for various benchmarks using vLLM for efficient inference. Each script supports greedy decoding and can be run independently.
+The `baseline/` folder contains evaluation scripts for various benchmarks using vLLM for efficient inference. Each script supports greedy decoding and can be run independently. All results are saved to `results/`.
 
 ```bash
 # Evaluate on MATH dataset
@@ -40,6 +117,9 @@ python baseline/baseline_math.py --model_id Qwen/Qwen2.5-Math-7B-Instruct
 
 # Evaluate on GSM8K dataset
 python baseline/baseline_gsmk.py --model_id Qwen/Qwen2.5-Math-7B-Instruct
+
+# Evaluate on Code dataset
+python baseline/baseline_code.py --model_id Qwen/Qwen2.5-Math-7B-Instruct
 
 # Evaluate on MMLU benchmark
 python baseline/baseline_mmlu.py --model_id Qwen/Qwen3-1.7B
@@ -51,58 +131,315 @@ python baseline/baseline_alpa.py --model_id Qwen/Qwen3-1.7B
 python baseline/baseline_ssts.py --model_id Qwen/Qwen3-1.7B
 ```
 
-### Running Supervised Fine-Tuning
+---
 
-The project provides two SFT trainers for different domains: `sft4chat_trainer.py` for conversational tasks using the UltraChat dataset, and `sft4math_trainer.py` for mathematical reasoning using the MATH dataset with R1-zero format.
+### Custom Trainers (`trainer/`)
+
+These trainers use custom training loops with direct PyTorch optimization. They require vLLM for validation-time generation (reasoning/RL tasks use two GPUs: one for training, one for vLLM inference). Checkpoints are saved to `checkpoints/`.
+
+> **Note**: All `trainer/` scripts should be run from the project root directory.
+
+#### SFT — Chat Mode
+
+Fine-tune on the UltraChat dataset for conversational tasks:
 
 ```bash
-# SFT for Chat (UltraChat dataset)
-python trainer/sft4chat_trainer.py \
+python trainer/sft_trainer.py \
+    --mode chat \
     --model_id Qwen/Qwen3-1.7B \
-    --train_path ./data/ultrachat/train.jsonl \
-    --valid_path ./data/ultrachat/valid.jsonl \
-    --lr 5e-6 \
-    --epochs 1 \
+    --lr 1e-5 \
+    --epochs 2 \
     --batch_size 32 \
-    --micro_batch_size 2 \
-    --seq_length 1024
-
-# SFT for Math (MATH dataset with chain-of-thought)
-python trainer/sft4math_trainer.py \
-    --model_id Qwen/Qwen2.5-Math-1.5B \
-    --train_path ./data/math/sft_train.jsonl \
-    --valid_path ./data/math/test.jsonl \
-    --lr 5e-6 \
-    --epochs 4 \
-    --batch_size 4
+    --micro_batch 2 \
+    --max_length 2048
 ```
 
-### Running Reinforcement Learning
+Checkpoints: `checkpoints/SFT4Chat/`
 
-For reinforcement learning, use `rl4chat_trainer.py` for DPO-based preference alignment on dialogue tasks, and `rl4math_trainer.py` for GRPO-based reward optimization on mathematical reasoning.
+#### SFT — Reasoning Mode
+
+Fine-tune on math/code/gsmk datasets with chain-of-thought:
 
 ```bash
-# DPO for Chat (RLHF preference data)
-python trainer/rl4chat_trainer.py \
-    --model_id Qwen/Qwen3-1.7B \
-    --train_path ./data/rlhf/train.jsonl \
-    --valid_path ./data/rlhf/valid.jsonl \
-    --beta 0.1 \
-    --lr 1e-6 \
-    --epochs 1 \
-    --batch_size 8
-
-# GRPO for Math (reward-based RL)
-python trainer/rl4math_trainer.py \
+# Math
+python trainer/sft_trainer.py \
+    --mode reasoning \
+    --dataset math \
     --model_id Qwen/Qwen2.5-Math-1.5B \
-    --train_path ./data/math/train.jsonl \
-    --valid_path ./data/math/test.jsonl \
-    --n_grpo_steps 200 \
-    --group_size 8 \
-    --rollout_batch_size 256 \
-    --loss_type reinforce_with_baseline
+    --lr 5e-6 \
+    --epochs 2 \
+    --batch_size 32 \
+    --micro_batch 2
+
+# Code
+python trainer/sft_trainer.py \
+    --mode reasoning \
+    --dataset code \
+    --model_id Qwen/Qwen2.5-Math-1.5B
+
+# GSM8K
+python trainer/sft_trainer.py \
+    --mode reasoning \
+    --dataset gsmk \
+    --model_id Qwen/Qwen2.5-Math-1.5B
 ```
 
+Checkpoints: `checkpoints/SFT4{dataset}/` (e.g., `checkpoints/SFT4math/`)
+
+#### DPO
+
+Preference-based alignment on RLHF data (requires 2 GPUs: policy + reference model):
+
+```bash
+python trainer/dpo_trainer.py \
+    --model_id Qwen/Qwen3-1.7B \
+    --dataset rlhf \
+    --beta 0.2 \
+    --lr 5e-6 \
+    --epochs 2 \
+    --batch_size 32 \
+    --micro_batch 4 \
+    --policy_device cuda:1 \
+    --ref_device cuda:2
+```
+
+Checkpoints: `checkpoints/DPO/`
+
+#### GRPO
+
+Reward-based RL for math/code reasoning (requires 2 GPUs: training + vLLM):
+
+```bash
+python trainer/grpo_trainer.py \
+    --dataset math \
+    --model_id Qwen/Qwen2.5-Math-1.5B \
+    --lr 5e-6 \
+    --num_iterations 250 \
+    --num_generations 8 \
+    --batch_size 32 \
+    --micro_batch 2 \
+    --beta 0.01 \
+    --train_device cuda:0 \
+    --valid_device cuda:1
+
+# With SFT warm-start
+python trainer/grpo_trainer.py \
+    --dataset math \
+    --init_checkpoint checkpoints/SFT4math/sft_math_lr5e-06_final.pt
+```
+
+Checkpoints: `checkpoints/GRPO/`
+
+#### PPO
+
+Proximal Policy Optimization for math/code reasoning (requires 2 GPUs):
+
+```bash
+python trainer/ppo_trainer.py \
+    --dataset math \
+    --model_id Qwen/Qwen2.5-Math-1.5B \
+    --lr 1e-5 \
+    --num_iterations 200 \
+    --batch_size 32 \
+    --micro_batch 2 \
+    --beta 0.1 \
+    --train_device cuda:1 \
+    --valid_device cuda:2
+```
+
+Checkpoints: `checkpoints/PPO/`
+
+---
+
+### TRL-based Trainers (`trl_trainer/`)
+
+These trainers use HuggingFace's [TRL](https://github.com/huggingface/trl) library, providing a higher-level API with built-in W&B logging, gradient checkpointing, and distributed training support. Checkpoints are saved to `[TRL]checkpoints/`.
+
+> **Note**: All `trl_trainer/` scripts should be run from the project root directory.
+
+#### SFT — Chat Mode
+
+```bash
+python trl_trainer/sft_trainer.py \
+    --mode chat \
+    --model_id Qwen/Qwen3-1.7B \
+    --lr 2e-5 \
+    --epochs 2 \
+    --batch_size 32 \
+    --micro_batch 2 \
+    --max_length 2048 \
+    --packing
+```
+
+Checkpoints: `[TRL]checkpoints/SFT4Chat/`
+
+#### SFT — Reasoning Mode
+
+```bash
+# Math
+python trl_trainer/sft_trainer.py \
+    --mode reasoning \
+    --dataset math \
+    --model_id Qwen/Qwen2.5-Math-1.5B \
+    --lr 5e-6 \
+    --epochs 2 \
+    --batch_size 32 \
+    --micro_batch 2
+
+# Code
+python trl_trainer/sft_trainer.py \
+    --mode reasoning \
+    --dataset code \
+    --model_id Qwen/Qwen2.5-Math-1.5B
+    --lr 5e-6 \
+    --epochs 2 \
+    --batch_size 32 \
+    --micro_batch 2
+
+# GSM8K
+python trl_trainer/sft_trainer.py \
+    --mode reasoning \
+    --dataset gsmk \
+    --model_id Qwen/Qwen2.5-Math-1.5B
+    --lr 5e-6 \
+    --epochs 2 \
+    --batch_size 32 \
+    --micro_batch 2
+```
+
+Checkpoints: `[TRL]checkpoints/SFT4{dataset}/`
+
+#### DPO
+
+```bash
+python trl_trainer/dpo_trainer.py \
+    --model_id Qwen/Qwen3-1.7B \
+    --dataset rlhf \
+    --beta 0.2 \
+    --lr 5e-6 \
+    --epochs 2 \
+    --batch_size 32 \
+    --micro_batch 4
+
+# With SFT warm-start
+python trl_trainer/dpo_trainer.py \
+    --init_checkpoint checkpoints/SFT4Chat/sft_final.pt
+```
+
+Checkpoints: `[TRL]checkpoints/DPO/`
+
+#### GRPO
+
+```bash
+python trl_trainer/grpo_trainer.py \
+    --dataset math \
+    --model_id Qwen/Qwen2.5-Math-1.5B \
+    --lr 5e-6 \
+    --max_steps 250 \
+    --num_generations 8 \
+    --batch_size 32 \
+    --micro_batch 2 \
+    --beta 0.01
+
+# With SFT warm-start
+python trl_trainer/grpo_trainer.py \
+    --dataset math \
+    --init_checkpoint checkpoints/SFT4math/sft_final.pt
+```
+
+Checkpoints: `[TRL]checkpoints/GRPO4{dataset}/`
+
+#### PPO
+
+```bash
+python trl_trainer/ppo_trainer.py \
+    --dataset math \
+    --model_id Qwen/Qwen2.5-Math-1.5B \
+    --lr 1e-5 \
+    --total_episodes 6400 \
+    --batch_size 32 \
+    --micro_batch 2 \
+    --kl_coef 0.1
+
+# With SFT warm-start
+python trl_trainer/ppo_trainer.py \
+    --dataset math \
+    --init_checkpoint checkpoints/SFT4math/sft_final.pt
+```
+
+Checkpoints: `[TRL]checkpoints/PPO4{dataset}/`
+
+---
+
+## Changelog
+
+### Unified Prompt Template System
+
+Prompt templates were previously duplicated as inline Python strings across multiple trainer files. They have been consolidated into a single source of truth under `prompts/`:
+
+```
+prompts/
+├── math.prompt    # Math reasoning (think/answer format)
+├── code.prompt    # Competitive programming
+├── gsmk.prompt    # GSM8K step-by-step
+├── rlhf.prompt    # Alpaca-style instruction/response
+├── mmlu.prompt    # Multiple-choice QA
+└── ssts.prompt    # Safety alignment
+```
+
+All trainers now load prompts at runtime via `load_prompt_template(dataset_name)`, which reads from `prompts/<dataset_name>.prompt`. No inline prompt strings remain in the codebase.
+
+### Shared Utilities (`utils.py`)
+
+Both `trainer/` and `trl_trainer/` now have a `utils.py` module that centralizes shared logic:
+
+- **`load_prompt_template(dataset_name)`** — Reads the corresponding `.prompt` file from `prompts/`
+- **`get_reward_fn(dataset_name)`** — Returns the appropriate reward function (`dsr1_reward_fn`, `gsmk_reward_fn`, or `code_reward_fn`)
+- **`load_jsonl(path)`** — Convenience function for loading JSONL data files (in `trainer/utils.py`)
+- **`make_trl_reward_fn()`** — Wraps reward functions to match TRL's expected interface (in `trl_trainer/utils.py`)
+
+This eliminates repeated `from utils.rewards import ...` and inline `open()` calls scattered across trainer files.
+
+### Unified SFT Trainer
+
+The previously separate `sft4chat_trainer.py` and `sft4reas_trainer.py` have been merged into a single `sft_trainer.py` with a `--mode` flag:
+
+```bash
+# Before (removed):
+python trainer/sft4chat_trainer.py ...
+python trainer/sft4reas_trainer.py ...
+
+# After:
+python trainer/sft_trainer.py --mode chat ...
+python trainer/sft_trainer.py --mode reasoning --dataset math ...
+```
+
+This applies to both `trainer/sft_trainer.py` and `trl_trainer/sft_trainer.py`.
+
+### TRL-based Training Implementation
+
+A complete parallel implementation using HuggingFace TRL was added under `trl_trainer/`, covering all four training algorithms (SFT, DPO, GRPO, PPO). The TRL trainers provide:
+
+- Built-in W&B integration and logging
+- Automatic gradient checkpointing
+- HuggingFace-compatible checkpoint saving (model + tokenizer)
+- Additionally saves `.pt` state dicts for compatibility with the custom evaluation pipeline
+
+### Separated Output Directories
+
+To avoid checkpoint/result collisions between the two trainer implementations:
+
+| | Custom (`trainer/`) | TRL (`trl_trainer/`) |
+|---|---|---|
+| Checkpoints | `checkpoints/` | `[TRL]checkpoints/` |
+| Results | `results/` | `[TRL]results/` |
+| W&B projects | `SFT4Chat`, `DPO-RLHF`, `GRPO-MATH`, ... | `[TRL]SFT4Chat`, `[TRL]DPO-RLHF`, `[TRL]GRPO-MATH`, ... |
+
+### PPO Trainer
+
+A full PPO training pipeline was added to both `trainer/` and `trl_trainer/`, supporting math and code datasets with verifiable reward functions. The TRL version includes a `VerifiableRewardModel` wrapper that bridges the project's reward functions with TRL's expected reward model interface.
+
+---
 
 ## Math Dataset Construction
 
@@ -281,7 +618,7 @@ for epoch in range(args.epochs):
 
 ## Reinforcement Learning
 
-While SFT teaches models to imitate demonstrations, reinforcement learning enables models to optimize for specific objectives beyond simple imitation. This project implements two complementary RL approaches: DPO for learning from human preferences and GRPO for optimizing verifiable rewards.
+While SFT teaches models to imitate demonstrations, reinforcement learning enables models to optimize for specific objectives beyond simple imitation. This project implements three complementary RL approaches: DPO for learning from human preferences, GRPO for optimizing verifiable rewards, and PPO for general policy optimization.
 
 ### Data Processing for RL
 
@@ -339,23 +676,7 @@ def dpo_loss(
     return loss.squeeze()
 ```
 
-The DPO training loop maintains both a policy model (being optimized) and a frozen reference model. The reference model provides a baseline that prevents the policy from deviating too far from the initial distribution:
-
-```python
-for batch_idx, batch in enumerate(progress_bar):
-    loss, metadata = dpo_batch_loss(
-        policy_model=policy_model,
-        reference_model=reference_model,
-        tokenizer=tokenizer,
-        instructions=batch['instructions'],
-        chosen_responses=batch['chosen'],
-        rejected_responses=batch['rejected'],
-        template=ALPACA_TEMPLATE,
-        beta=args.beta,
-    )
-    scaled_loss = loss / args.gradient_accumulation_steps
-    scaled_loss.backward()
-```
+The DPO training loop maintains both a policy model (being optimized) and a frozen reference model. The reference model provides a baseline that prevents the policy from deviating too far from the initial distribution.
 
 ### GRPO Algorithm
 
@@ -412,34 +733,6 @@ def compute_grpo_clip_loss(
     with torch.no_grad():
         clip_fraction = (surr2 < surr1).float().mean()
     return loss, {"clip_fraction": clip_fraction, "ratio_mean": ratio.detach().mean()}
-```
-
-The GRPO training loop alternates between rollout generation (using vLLM for efficiency) and policy updates:
-
-```python
-for step in tqdm(range(args.n_grpo_steps), desc="GRPO Steps"):
-    # 1. Generate rollouts using current policy
-    load_policy_into_vllm_instance(policy, vllm_model)
-    rollout_outputs = vllm_model.generate(prompts, rollout_sampling_params, use_tqdm=False)
-
-    # 2. Compute rewards and advantages
-    advantages, raw_rewards, reward_meta = compute_group_normalized_rewards(
-        reward_fn=r1_zero_reward_fn,
-        rollout_responses=flat_responses,
-        repeated_ground_truths=repeated_grounds,
-        group_size=args.group_size,
-        advantage_eps=args.advantage_eps,
-        normalize_by_std=args.use_std_normalization
-    )
-
-    # 3. Update policy using GRPO loss
-    loss, train_meta = grpo_microbatch_train_step(
-        policy_log_probs=model_outputs["log_probs"],
-        response_mask=mask,
-        gradient_accumulation_steps=args.gradient_accumulation_steps,
-        loss_type=args.loss_type,
-        advantages=adv,
-    )
 ```
 
 ## Speculative Decoding

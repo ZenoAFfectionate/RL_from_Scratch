@@ -11,6 +11,10 @@ sys.path.append(project_root)
 from utils.rewards import code_reward_fn
 from utils.vllm_helper import evaluate_vllm
 
+# vllm_helper sets VLLM_ENABLE_V1_MULTIPROCESSING=0 (needed for training),
+# but for inference with tensor_parallel we want native multiprocessing
+# instead of Ray, so re-enable it here.
+os.environ.pop("VLLM_ENABLE_V1_MULTIPROCESSING", None)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -19,7 +23,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model_name",
         type=str,
-        default="Qwen/Qwen2.5-Coder-1.5B",
+        default="IIGroup/X-Coder-RL-Qwen3-8B",
         help="The name or path of the model to use."
     )
     parser.add_argument(
@@ -30,7 +34,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature.")
     parser.add_argument("--top_p", type=float, default=1.0, help="Top-p (nucleus) sampling.")
-    parser.add_argument("--max_tokens", type=int, default=8192, help="Max tokens to generate.")
+    parser.add_argument("--max_tokens", type=int, default=16384, help="Max tokens to generate.")
 
     args = parser.parse_args()
 
@@ -43,7 +47,7 @@ if __name__ == "__main__":
 
     # load prompt template
     print(f"Loading prompt template ...", end=' ')
-    with open(f"../trainer/prompts/{args.dataset_name}.prompt", "r") as f:
+    with open(f"../prompts/{args.dataset_name}.prompt", "r") as f:
         prompt_template = f.read()
     print("Success!\nLoaded prompt template.")
 
@@ -64,14 +68,16 @@ if __name__ == "__main__":
     # load vLLM model
     vllm_model = LLM(
         model=args.model_name,
-        trust_remote_code=True
+        trust_remote_code=True,
+        tensor_parallel_size=1,
+        gpu_memory_utilization=0.95
     )
     
     sampling_params = SamplingParams(
         temperature=args.temperature,
         top_p=args.top_p,
         max_tokens=args.max_tokens,
-        stop=["</solution>"],
+        stop=["<|im_end|>", "<|endoftext|>"],
         include_stop_str_in_output=True,
     )
     

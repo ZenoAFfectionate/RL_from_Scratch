@@ -15,6 +15,7 @@ sys.path.insert(0, project_root)
 from data.lm_dataset import RLHFDataset
 from algorithms.dpo import DPO_Trainer
 from utils.vllm_helper import init_policy
+from trainer.utils import load_prompt_template
 
 
 if __name__ == "__main__":
@@ -48,9 +49,8 @@ if __name__ == "__main__":
     # ----------------------------------
     #  Load prompt template and dataset
     # ----------------------------------
-    print(f">>> Loading prompt template...")
-    with open(f'./prompts/{args.dataset}.jsonl', "r") as f:
-        template = f.read()
+    print(f">>> Loading prompt template for {args.dataset}")
+    template = load_prompt_template(args.dataset)
 
     print(f"\n>>> Loading training data...")
     train_dataset = RLHFDataset(f'../data/{args.dataset}/train.jsonl')

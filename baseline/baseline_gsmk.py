@@ -45,7 +45,7 @@ if __name__ == "__main__":
 
     # load prompt template
     print(f"Loading prompt template ...", end=' ')
-    with open(f"../trainer/prompts/{args.dataset_name}.prompt", "r") as f:
+    with open(f"../prompts/{args.dataset_name}.prompt", "r") as f:
         prompt_template = f.read()
     print("Success!\nLoaded prompt template.")
 
@@ -65,7 +65,6 @@ if __name__ == "__main__":
     vllm_model = LLM(
         model=args.model_name, 
         trust_remote_code=True, 
-        max_model_len=32768
     )
     
     sampling_params = SamplingParams(
