@@ -15,7 +15,7 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
 sys.path.insert(0, project_root)
 
-from trl_trainer.utils import load_prompt_template, get_base_reward_fn, FileLoggingCallback
+from trl_trainer.utils import load_prompt_template, get_base_reward_fn, FileLoggingCallback, run_post_training_eval
 
 
 def build_chat_dataset(data_path, prompt_template):
@@ -75,7 +75,7 @@ if __name__ == "__main__":
     parser.add_argument("--dataset", type=str, default="math",
                         choices=["math", "gsmk", "code"],
                         help="Dataset for reasoning mode.")
-    parser.add_argument("--model_id", type=str, default="Qwen/Qwen3-1.7B")
+    parser.add_argument("--model_id", type=str, default="Qwen/Qwen3.5-2B")
 
     # --- Data Paths ---
     parser.add_argument("--train_path", type=str, default="data/ultrachat/train.jsonl",
@@ -171,7 +171,6 @@ if __name__ == "__main__":
         bf16=args.bf16,
         disable_tqdm=True,
         log_level="info",
-        include_tokens_per_second=True,
         include_num_input_tokens_seen=True,
         logging_steps=args.logging_steps,
         eval_strategy="steps",
@@ -209,3 +208,40 @@ if __name__ == "__main__":
     pt_path = os.path.join(args.output_dir, f"{run_name}_final.pt")
     torch.save(model.state_dict(), pt_path)
     print(f">>> State dict saved to {pt_path}")
+
+    # ─── Post-Training Evaluation (generation-based) ───────────────
+    import gc
+
+    print("\n>>> Freeing training objects for post-training evaluation...")
+    del trainer
+    del model
+    gc.collect()
+    torch.cuda.empty_cache()
+
+    if args.mode == "chat":
+        # Chat SFT: evaluate on MMLU as a quantifiable benchmark
+        eval_dataset_name = "mmlu"
+        eval_data = os.path.join(project_root, "data/mmlu/valid.jsonl")
+        eval_template = load_prompt_template("mmlu")
+        eval_results_path = os.path.join(args.output_dir, "trl_sft_mmlu_eval_results.jsonl")
+    else:
+        # Reasoning SFT: evaluate on the dataset's own validation set
+        eval_dataset_name = args.dataset
+        eval_data = os.path.join(project_root, f"data/{args.dataset}/valid.jsonl")
+        eval_template = prompt_template
+        eval_results_path = os.path.join(args.output_dir, f"trl_sft_{args.dataset}_eval_results.jsonl")
+
+    print(f">>> Evaluating on {eval_dataset_name} benchmark...")
+    metrics = run_post_training_eval(
+        model_path=final_dir,
+        dataset_name=eval_dataset_name,
+        eval_data_path=eval_data,
+        prompt_template=eval_template,
+        output_filepath=eval_results_path,
+        seed=args.seed,
+        model_id=args.model_id,
+    )
+    print(f"\n>>> Post-training evaluation results ({eval_dataset_name}):")
+    print(f"    Format Accuracy:  {metrics['format_accuracy']:.2f}%")
+    print(f"    Answer Accuracy:  {metrics['answer_accuracy']:.2f}%")
+    print(f"    Overall Accuracy: {metrics['accuracy']:.2f}%")

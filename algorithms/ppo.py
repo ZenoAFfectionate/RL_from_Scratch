@@ -6,7 +6,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-from tqdm import tqdm
 
 from datetime import datetime
 
@@ -638,7 +637,7 @@ class PPO_Trainer:
         last_log_time = time.time()
         last_log_step = 0
 
-        for step in range(self.num_iterations):
+        for _ in range(self.num_iterations):
             # sample prompts from training dataset
             indices = np.random.choice(
                 len(self.train_dataset),

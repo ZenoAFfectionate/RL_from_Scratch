@@ -18,7 +18,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model_name",
         type=str,
-        default="Qwen/Qwen2.5-Math-1.5B",
+        default="Qwen/Qwen3.5-2B",
         help="The name or path of the model to use from Hugging Face Hub."
     )
     parser.add_argument(
@@ -30,7 +30,7 @@ if __name__ == "__main__":
     
     parser.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature.")
     parser.add_argument("--top_p", type=float, default=1.0, help="Top-p (nucleus) sampling.")
-    parser.add_argument("--max_tokens", type=int, default=4096, help="Maximum number of tokens to generate.")
+    parser.add_argument("--max_tokens", type=int, default=16384, help="Maximum number of tokens to generate.")
 
     args = parser.parse_args()
 
@@ -43,13 +43,13 @@ if __name__ == "__main__":
 
     # load dataset and prompt template
     print(f"Loading prompt template ...", end=' ')
-    with open(f"../prompts/{args.dataset_name}.prompt", "r") as f:
+    with open(os.path.join(project_root, "prompts", f"{args.dataset_name}.prompt"), "r") as f:
         prompt_template = f.read()
     print("Success!\nLoaded prompt template.")
 
     dataset = []
     print(f"Loading validation set ...", end=' ')
-    with open(f"../data/{args.dataset_name}/valid.jsonl", "r") as f:
+    with open(os.path.join(project_root, "data", args.dataset_name, "valid.jsonl"), "r") as f:
         for line in f: dataset.append(json.loads(line))
     print(f"Success!\nLoaded {len(dataset)} examples.")
 
@@ -76,5 +76,5 @@ if __name__ == "__main__":
         prompts=prompts,
         answers=ground_truth_answers,
         eval_sampling_params=sampling_params,
-        output_filepath=f"../results/baseline_math.jsonl"
+        output_filepath=os.path.join(project_root, "results", "baseline_math.jsonl")
     )

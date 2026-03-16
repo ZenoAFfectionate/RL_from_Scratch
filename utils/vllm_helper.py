@@ -11,7 +11,7 @@ from typing import Callable, List
 os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
 
 from vllm import LLM, SamplingParams
-from vllm.model_executor import set_random_seed as vllm_set_random_seed
+from vllm.utils.torch_utils import set_random_seed as vllm_set_random_seed
 from transformers import PreTrainedModel, AutoModelForCausalLM, AutoTokenizer
 
 
@@ -22,20 +22,14 @@ def init_vllm(model_id: str, device: str, seed: int, gpu_memory_utilization: flo
     """
     vllm_set_random_seed(seed)
 
-    # Patch vLLM to make sure we can
-    # (1) place the vLLM model on the desired device (world_size_patch) and
-    # (2) avoid a test that is not designed for our setting (profiling_patch).
+    # Patch vLLM to place the model on the desired device.
+    # The old profiling_patch is no longer needed in vLLM v1 (v0.16+).
     world_size_patch = patch(
         "torch.distributed.get_world_size", return_value=1)
-    profiling_patch = patch(
-        "vllm.worker.worker.Worker._assert_memory_footprint_increased_during_profiling",
-        return_value=None
-    )
 
-    with world_size_patch, profiling_patch:
+    with world_size_patch:
         return LLM(
             model=model_id,
-            device=device,
             enforce_eager=True,
             dtype=torch.bfloat16,
             enable_prefix_caching=True,
@@ -43,7 +37,7 @@ def init_vllm(model_id: str, device: str, seed: int, gpu_memory_utilization: flo
         )
 
 
-def init_policy(model_id='Qwen/Qwen2.5-Math-1.5B', device=None):
+def init_policy(model_id='Qwen/Qwen3.5-2B', device=None):
     ''' Initialize the policy model and tokenizer '''
     model = AutoModelForCausalLM.from_pretrained(
         model_id,
@@ -59,6 +53,19 @@ def init_policy(model_id='Qwen/Qwen2.5-Math-1.5B', device=None):
 def load_policy_into_vllm_instance(policy: PreTrainedModel, llm: LLM):
     """ Load the weights from a HuggingFace model into a vLLM instance."""
     weights = list(policy.state_dict().items())
+    llm.apply_model(lambda model: model.load_weights(weights))
+
+
+def load_safetensors_into_vllm(llm: LLM, safetensors_path: str):
+    """Load fine-tuned weights from a safetensors file into a vLLM instance.
+
+    This bypasses the strict weight validation in vLLM's default loader,
+    so it's safe to load a text-only checkpoint into a VL model — only the
+    matching (language model) weights are updated; other weights (e.g. the
+    visual encoder) remain at their original values.
+    """
+    from safetensors.torch import load_file
+    weights = list(load_file(safetensors_path).items())
     llm.apply_model(lambda model: model.load_weights(weights))
 
 

@@ -8,6 +8,9 @@ import sys
 from vllm import LLM, SamplingParams
 from transformers import AutoTokenizer
 
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(current_dir)
+
 
 # Keywords whose presence in a response indicates a safety refusal.
 REFUSAL_KEYWORDS = [
@@ -29,12 +32,12 @@ def is_refusal(text: str) -> bool:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate SimpleSafetyTests predictions with vLLM.")
 
-    parser.add_argument("--model_name", type=str, default="Qwen/Qwen3-1.7B")
+    parser.add_argument("--model_name", type=str, default="Qwen/Qwen3.5-2B")
     parser.add_argument("--dataset_name", type=str, default="ssts")
 
     parser.add_argument("--temperature", type=float, default=0.6, help="Sampling temperature.")
     parser.add_argument("--top_p", type=float, default=0.95, help="Top-p sampling.")
-    parser.add_argument("--max_tokens", type=int, default=2048, help="Maximum number of tokens to generate.")
+    parser.add_argument("--max_tokens", type=int, default=16384, help="Maximum number of tokens to generate.")
 
     # Evaluation arguments
     parser.add_argument("--evaluate", action="store_true",
@@ -57,14 +60,14 @@ if __name__ == "__main__":
     # load SimpleSafetyTests prompts
     dataset = []
     print(f"Loading validation set ...", end=' ')
-    with open(f"../data/{args.dataset_name}/sst_eval.jsonl", "r") as f:
+    with open(os.path.join(project_root, "data", args.dataset_name, "sst_eval.jsonl"), "r") as f:
         for line in f:
             dataset.append(json.loads(line))
     print(f"Success!\nLoaded {len(dataset)} examples.")
 
     # load prompt template
     print(f"Loading prompt template ...", end=' ')
-    with open(f"../prompts/{args.dataset_name}.prompt", "r") as f:
+    with open(os.path.join(project_root, "prompts", f"{args.dataset_name}.prompt"), "r") as f:
         prompt_template = f.read()
     print("Success!")
 
@@ -120,7 +123,7 @@ if __name__ == "__main__":
         results.append(entry)
 
     # save results to file (JSONL format: one JSON object per line)
-    output_path = "../results/baseline_ssts.jsonl"
+    output_path = os.path.join(project_root, "results", "baseline_ssts.jsonl")
     with open(output_path, "w", encoding="utf-8") as fout:
         for entry in results:
             fout.write(json.dumps(entry, ensure_ascii=False) + "\n")
@@ -192,7 +195,7 @@ if __name__ == "__main__":
         subprocess.run(cmd, check=True)
     else:
         print("\nTo evaluate with a local judge, re-run with --evaluate, or:")
-        print(f"  python ../utils/evaluate_safety.py "
+        print(f"  python utils/evaluate_safety.py "
               f"--model-outputs {output_path} "
               f"--judge-model Qwen/Qwen3-72B-Instruct "
               f"--quantization fp8 --num-gpus 2")

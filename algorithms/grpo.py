@@ -154,7 +154,7 @@ class GRPO_Trainer:
         else:
             grounds = [item["solution"] for item in batch_items]
 
-        # generate N responses per prompt
+        # generate N responses per prompt via vLLM
         rollout_outputs = self.valid_model.generate(
             prompts, self.rollout_sampling_params, use_tqdm=False)
 
@@ -214,8 +214,7 @@ class GRPO_Trainer:
                 del logits, token_nll, old_lp_padded
 
         # attach per-sample advantages
-        for i, s in enumerate(samples):
-            s["advantage"] = advantages[i]
+        for i, s in enumerate(samples): s["advantage"] = advantages[i]
 
         return {
             "samples": samples,
@@ -249,7 +248,7 @@ class GRPO_Trainer:
         if advantages.dim() == 1:
             advantages = advantages.unsqueeze(1)
 
-        # Per-token GRPO-Clip loss (inlined)
+        # "Per-token" GRPO-Clip loss (inlined)
         ratio = torch.exp(policy_log_probs - old_log_probs)
         surr1 = ratio * advantages
         surr2 = torch.clamp(ratio, 1.0 - self.clip_eps, 1.0 + self.clip_eps) * advantages
@@ -272,7 +271,7 @@ class GRPO_Trainer:
             with torch.no_grad():
                 meta_info["kl_mean"] = self.masked_mean(kl, response_mask).detach()
 
-        # mask and mean over response tokens
+        # mask and mean over response tokens to reduce length influence
         loss = self.masked_mean(per_token_loss, response_mask)
 
         return loss, meta_info

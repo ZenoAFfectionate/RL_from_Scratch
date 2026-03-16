@@ -21,7 +21,7 @@ from trainer.utils import load_prompt_template
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run DPO training on RLHF preference data.")
     # model and dataset:
-    parser.add_argument("--model_id", type=str, default="Qwen/Qwen3-1.7B")
+    parser.add_argument("--model_id", type=str, default="Qwen/Qwen3.5-2B")
     parser.add_argument("--dataset", type=str, default="rlhf", choices=["rlhf"])
     # DPO hyperparameters:
     parser.add_argument("--beta", type=float, default=0.2, help="DPO temperature parameter.")

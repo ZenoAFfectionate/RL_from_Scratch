@@ -221,7 +221,7 @@ class DPO_Trainer:
         L = -log σ( β * ( (log π_θ(y_w|x) - log π_ref(y_w|x))
                          - (log π_θ(y_l|x) - log π_ref(y_l|x)) ) )
         """
-        log_ratio_chosen = policy_chosen_lp - ref_chosen_lp
+        log_ratio_chosen   = policy_chosen_lp - ref_chosen_lp
         log_ratio_rejected = policy_rejected_lp - ref_rejected_lp
         reward_margin = self.beta * (log_ratio_chosen - log_ratio_rejected)
 

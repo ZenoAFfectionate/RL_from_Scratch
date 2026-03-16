@@ -4,8 +4,8 @@ TRL-based DPO Trainer for RLHF preference data.
 Functionally equivalent to trainer/dpo_trainer.py.
 
 Usage:
-  python dpo_trainer.py --model_id Qwen/Qwen3-1.7B --dataset rlhf
-  python dpo_trainer.py --model_id Qwen/Qwen3-1.7B --init_checkpoint ../checkpoints/SFT4Chat/sft_final.pt
+  python dpo_trainer.py --model_id Qwen/Qwen3.5-2B --dataset rlhf
+  python dpo_trainer.py --model_id Qwen/Qwen3.5-2B --init_checkpoint ../checkpoints/SFT4Chat/sft_final.pt
 """
 
 import os
@@ -25,7 +25,7 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
 sys.path.insert(0, project_root)
 
-from trl_trainer.utils import load_prompt_template, FileLoggingCallback
+from trl_trainer.utils import load_prompt_template, FileLoggingCallback, run_post_training_eval
 
 
 def build_dpo_dataset(data_path, template):
@@ -68,7 +68,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="TRL-based DPO Trainer")
 
     # --- Model ---
-    parser.add_argument("--model_id", type=str, default="Qwen/Qwen3-1.7B")
+    parser.add_argument("--model_id", type=str, default="Qwen/Qwen3.5-2B")
     parser.add_argument("--dataset", type=str, default="rlhf", choices=["rlhf"])
     parser.add_argument("--init_checkpoint", type=str, default=None,
                         help="Path to a .pt state_dict to warm-start the policy (e.g., SFT checkpoint).")
@@ -78,7 +78,7 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", type=int, default=2)
     parser.add_argument("--lr", type=float, default=5e-6)
     parser.add_argument("--batch_size", type=int, default=32)
-    parser.add_argument("--micro_batch", type=int, default=4)
+    parser.add_argument("--micro_batch", type=int, default=2)
     parser.add_argument("--clip_grad_norm", type=float, default=1.0)
     parser.add_argument("--max_length", type=int, default=2048)
     parser.add_argument("--max_prompt_length", type=int, default=512)
@@ -124,7 +124,7 @@ if __name__ == "__main__":
     # Load SFT checkpoint if provided (warm-start)
     if args.init_checkpoint is not None:
         print(f">>> Loading initial checkpoint: {args.init_checkpoint}")
-        state_dict = torch.load(args.init_checkpoint, map_location="cpu")
+        state_dict = torch.load(args.init_checkpoint, map_location="cpu", weights_only=True)
         model.load_state_dict(state_dict)
         del state_dict
         print("    Checkpoint loaded successfully.")
@@ -206,3 +206,32 @@ if __name__ == "__main__":
     pt_path = os.path.join(args.output_dir, f"trl_dpo_final.pt")
     torch.save(model.state_dict(), pt_path)
     print(f">>> State dict saved to {pt_path}")
+
+    # ─── Post-Training Evaluation (generation-based) ───────────────
+    import gc
+
+    print("\n>>> Freeing training objects for post-training evaluation...")
+    del trainer
+    del model
+    gc.collect()
+    torch.cuda.empty_cache()
+
+    # DPO trains on chat/preference data — evaluate on MMLU as a quantifiable benchmark
+    mmlu_eval_path = os.path.join(project_root, "data/mmlu/valid.jsonl")
+    mmlu_template = load_prompt_template("mmlu")
+    eval_results_path = os.path.join(args.output_dir, "trl_dpo_mmlu_eval_results.jsonl")
+
+    print(">>> Evaluating on MMLU benchmark...")
+    metrics = run_post_training_eval(
+        model_path=final_dir,
+        dataset_name="mmlu",
+        eval_data_path=mmlu_eval_path,
+        prompt_template=mmlu_template,
+        output_filepath=eval_results_path,
+        seed=args.seed,
+        model_id=args.model_id,
+    )
+    print(f"\n>>> Post-training evaluation results (MMLU):")
+    print(f"    Format Accuracy:  {metrics['format_accuracy']:.2f}%")
+    print(f"    Answer Accuracy:  {metrics['answer_accuracy']:.2f}%")
+    print(f"    Overall Accuracy: {metrics['accuracy']:.2f}%")

@@ -86,13 +86,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--draft_model",
         type=str,
-        default="Qwen/Qwen2.5-Math-1.5B",
+        default="Qwen/Qwen3.5-2B",
         help="The name or path of the draft model to use from Hugging Face Hub."
     )
     parser.add_argument(
         "--target_model",
         type=str,
-        default="Qwen/Qwen2.5-Math-7B",
+        default="Qwen/Qwen3.5-2B",
         help="The name or path of the target model to use from Hugging Face Hub."
     )
     parser.add_argument(

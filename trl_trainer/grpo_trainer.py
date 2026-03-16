@@ -5,10 +5,10 @@ Functionally equivalent to trainer/grpo_trainer.py.
 
 Usage examples:
   # GRPO on math dataset
-  python grpo_trainer.py --dataset math --model_id Qwen/Qwen2.5-Math-1.5B
+  python grpo_trainer.py --dataset math --model_id Qwen/Qwen3.5-2B
 
   # GRPO on code dataset
-  python grpo_trainer.py --dataset code --model_id Qwen/Qwen2.5-Math-1.5B
+  python grpo_trainer.py --dataset code --model_id Qwen/Qwen3.5-2B
 
   # With SFT warm-start
   python grpo_trainer.py --dataset math --init_checkpoint ../checkpoints/SFT4math/sft_final.pt
@@ -32,7 +32,7 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
 sys.path.insert(0, project_root)
 
-from trl_trainer.utils import load_prompt_template, get_base_reward_fn, make_trl_reward_fn as make_reward_fn, FileLoggingCallback
+from trl_trainer.utils import load_prompt_template, get_base_reward_fn, make_trl_reward_fn as make_reward_fn, FileLoggingCallback, run_post_training_eval
 
 
 def build_grpo_dataset(data_path, prompt_template, dataset_name):
@@ -78,7 +78,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="TRL-based GRPO Trainer")
 
     # --- Model ---
-    parser.add_argument("--model_id", type=str, default="Qwen/Qwen2.5-Math-1.5B")
+    parser.add_argument("--model_id", type=str, default="Qwen/Qwen3.5-2B")
     parser.add_argument("--dataset", type=str, default="math", choices=["math", "code", "gsmk"])
     parser.add_argument("--init_checkpoint", type=str, default=None,
                         help="Path to a .pt state_dict to warm-start the policy (e.g., SFT checkpoint).")
@@ -138,7 +138,7 @@ if __name__ == "__main__":
     # Load SFT checkpoint if provided (warm-start)
     if args.init_checkpoint is not None:
         print(f">>> Loading initial checkpoint: {args.init_checkpoint}")
-        state_dict = torch.load(args.init_checkpoint, map_location="cpu")
+        state_dict = torch.load(args.init_checkpoint, map_location="cpu", weights_only=True)
         model.load_state_dict(state_dict)
         del state_dict
         print("    Checkpoint loaded successfully.")
@@ -197,6 +197,7 @@ if __name__ == "__main__":
         save_total_limit=3,
         seed=args.seed,
         report_to="wandb",
+        gradient_checkpointing=True,
         log_completions=True,
         num_completions_to_print=2,
         remove_unused_columns=False,
@@ -229,3 +230,27 @@ if __name__ == "__main__":
     pt_path = os.path.join(args.output_dir, f"trl_grpo_final.pt")
     torch.save(model.state_dict(), pt_path)
     print(f">>> State dict saved to {pt_path}")
+
+    # ─── Post-Training Evaluation (generation-based) ───────────────
+    import gc
+
+    print("\n>>> Freeing training objects for post-training evaluation...")
+    del trainer
+    del model
+    gc.collect()
+    torch.cuda.empty_cache()
+
+    eval_output = os.path.join(args.output_dir, "trl_grpo_eval_results.jsonl")
+    metrics = run_post_training_eval(
+        model_path=final_dir,
+        dataset_name=args.dataset,
+        eval_data_path=eval_path,
+        prompt_template=prompt_template,
+        output_filepath=eval_output,
+        seed=args.seed,
+        model_id=args.model_id,
+    )
+    print(f"\n>>> Post-training evaluation results:")
+    print(f"    Format Accuracy:  {metrics['format_accuracy']:.2f}%")
+    print(f"    Answer Accuracy:  {metrics['answer_accuracy']:.2f}%")
+    print(f"    Overall Accuracy: {metrics['accuracy']:.2f}%")

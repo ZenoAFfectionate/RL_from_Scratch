@@ -18,9 +18,9 @@ from trainer.utils import load_prompt_template, load_jsonl, get_reward_fn
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run GRPO on Qwen-Math model.")
+    parser = argparse.ArgumentParser(description="Run GRPO training.")
 
-    parser.add_argument("--model_id", type=str, default="Qwen/Qwen2.5-Math-1.5B")
+    parser.add_argument("--model_id", type=str, default="Qwen/Qwen3.5-2B")
     parser.add_argument("--dataset", type=str, default="math", choices=["math", "code"])
 
 
@@ -77,7 +77,7 @@ if __name__ == "__main__":
     # Load SFT checkpoint if provided (warm-start)
     if args.init_checkpoint is not None:
         print(f">>> Loading initial checkpoint: {args.init_checkpoint}")
-        state_dict = torch.load(args.init_checkpoint, map_location=args.train_device)
+        state_dict = torch.load(args.init_checkpoint, map_location=args.train_device, weights_only=True)
         policy.load_state_dict(state_dict)
         del state_dict
         print("    Checkpoint loaded successfully.")

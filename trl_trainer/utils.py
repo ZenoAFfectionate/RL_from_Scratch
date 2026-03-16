@@ -21,6 +21,12 @@ _rewards = importlib.import_module("utils.rewards")
 dsr1_reward_fn = _rewards.dsr1_reward_fn
 gsmk_reward_fn = _rewards.gsmk_reward_fn
 code_reward_fn = _rewards.code_reward_fn
+mmlu_reward_fn = _rewards.mmlu_reward_fn
+
+_vllm_helper = importlib.import_module("utils.vllm_helper")
+init_vllm = _vllm_helper.init_vllm
+evaluate_vllm = _vllm_helper.evaluate_vllm
+load_safetensors_into_vllm = _vllm_helper.load_safetensors_into_vllm
 
 
 PROMPTS_DIR = os.path.join(project_root, "prompts")
@@ -58,6 +64,7 @@ def get_base_reward_fn(dataset_name):
         "math": dsr1_reward_fn,
         "gsmk": gsmk_reward_fn,
         "code": code_reward_fn,
+        "mmlu": mmlu_reward_fn,
     }[dataset_name]
 
 
@@ -149,3 +156,112 @@ class FileLoggingCallback(TrainerCallback):
 
         with open(self.log_path, "a") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+def run_post_training_eval(model_path, dataset_name, eval_data_path,
+                           prompt_template, output_filepath, seed=42,
+                           model_id=None):
+    """Run generation-based evaluation on the validation set using vLLM.
+
+    Loads the *original* model into vLLM (so all weights—including the
+    visual encoder—are present), then swaps in the fine-tuned text weights
+    from the saved checkpoint.  This avoids vLLM's strict weight-validation
+    error that would occur if we loaded a text-only checkpoint directly as
+    a VL model.
+
+    Parameters
+    ----------
+    model_path : str
+        Path to the saved HuggingFace-format model directory (must contain
+        ``model.safetensors``).
+    dataset_name : str
+        One of "math", "code", "gsmk", "mmlu".
+    eval_data_path : str
+        Path to the validation JSONL file.
+    prompt_template : str
+        The prompt template string.
+    output_filepath : str
+        Path to write per-example JSONL results.
+    seed : int
+        Random seed for vLLM.
+    model_id : str or None
+        Original HuggingFace model ID (e.g. "Qwen/Qwen3.5-2B").  Used to
+        initialise vLLM so that *all* weights (including vision encoder) are
+        present.  Falls back to loading directly from *model_path* if None.
+
+    Returns
+    -------
+    dict
+        Keys: accuracy, format_accuracy, answer_accuracy.
+    """
+    from vllm import SamplingParams
+
+    # Load validation data and format prompts
+    with open(eval_data_path, "r") as f:
+        raw_data = [json.loads(line) for line in f]
+
+    prompts = []
+    answers = []
+
+    int_to_letter = {0: "A", 1: "B", 2: "C", 3: "D"}
+
+    for item in raw_data:
+        if dataset_name == "mmlu":
+            prompt = prompt_template.format(
+                subject=item["subject"],
+                question=item["question"],
+                options=item["choices"],
+            )
+            prompts.append(prompt)
+            answers.append(int_to_letter[item["answer"]])
+        elif dataset_name == "gsmk":
+            prompt = prompt_template.format(question=item["problem"])
+            prompts.append(prompt)
+            answers.append(item["solution"])
+        else:
+            prompt = prompt_template.format(problem=item["problem"])
+            prompts.append(prompt)
+            if dataset_name == "code":
+                answers.append(item.get("test", item.get("solution", "")))
+            else:
+                answers.append(item["solution"])
+
+    # Initialize vLLM from the original model so ALL weights (including
+    # vision encoder) are present and pass vLLM's strict validation.
+    # Then swap in the fine-tuned text weights from the checkpoint.
+    safetensors_file = os.path.join(model_path, "model.safetensors")
+    if model_id and os.path.isfile(safetensors_file):
+        print(f"\n>>> Initialising vLLM from original model: {model_id}")
+        vllm_model = init_vllm(model_id, "cuda:0", seed)
+        print(f">>> Loading fine-tuned weights from: {model_path}")
+        load_safetensors_into_vllm(vllm_model, safetensors_file)
+    else:
+        # Fallback: load directly (works when all expected weights exist)
+        print(f"\n>>> Loading model into vLLM: {model_path}")
+        vllm_model = init_vllm(model_path, "cuda:0", seed)
+
+    # Greedy decoding params — shorter for MMLU (short answers)
+    if dataset_name == "mmlu":
+        eval_sampling_params = SamplingParams(
+            temperature=0.0,
+            max_tokens=128,
+        )
+    else:
+        eval_sampling_params = SamplingParams(
+            temperature=0.0,
+            max_tokens=8192,
+            stop=["</answer>", "</solution>", "```"],
+            include_stop_str_in_output=True,
+        )
+
+    # Get the reward function for this dataset
+    reward_fn = get_base_reward_fn(dataset_name)
+
+    # Run evaluation (evaluate_vllm internally frees GPU memory)
+    print(">>> Running post-training evaluation...")
+    metrics = evaluate_vllm(
+        vllm_model, reward_fn, prompts, answers,
+        eval_sampling_params, output_filepath,
+    )
+
+    return metrics

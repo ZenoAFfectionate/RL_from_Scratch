@@ -13,10 +13,10 @@ style) rather than a callable reward function. This module provides a
 
 Usage examples:
   # PPO on math dataset
-  python ppo_trainer.py --dataset math --model_id Qwen/Qwen2.5-Math-1.5B
+  python ppo_trainer.py --dataset math --model_id Qwen/Qwen3.5-2B
 
   # PPO on code dataset
-  python ppo_trainer.py --dataset code --model_id Qwen/Qwen2.5-Math-1.5B
+  python ppo_trainer.py --dataset code --model_id Qwen/Qwen3.5-2B
 
   # With SFT warm-start
   python ppo_trainer.py --dataset math --init_checkpoint ../checkpoints/SFT4math/sft_final.pt
@@ -45,7 +45,7 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
 sys.path.insert(0, project_root)
 
-from trl_trainer.utils import load_prompt_template, get_base_reward_fn, FileLoggingCallback
+from trl_trainer.utils import load_prompt_template, get_base_reward_fn, FileLoggingCallback, run_post_training_eval
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -209,7 +209,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="TRL-based PPO Trainer")
 
     # --- Model ---
-    parser.add_argument("--model_id", type=str, default="Qwen/Qwen2.5-Math-1.5B")
+    parser.add_argument("--model_id", type=str, default="Qwen/Qwen3.5-2B")
     parser.add_argument("--dataset", type=str, default="math", choices=["math", "code", "gsmk"])
     parser.add_argument("--init_checkpoint", type=str, default=None,
                         help="Path to a .pt state_dict to warm-start the policy.")
@@ -277,7 +277,7 @@ if __name__ == "__main__":
     # Load SFT checkpoint if provided
     if args.init_checkpoint is not None:
         print(f">>> Loading initial checkpoint: {args.init_checkpoint}")
-        state_dict = torch.load(args.init_checkpoint, map_location="cpu")
+        state_dict = torch.load(args.init_checkpoint, map_location="cpu", weights_only=True)
         policy_model.pretrained_model.load_state_dict(state_dict)
         del state_dict
         print("    Checkpoint loaded successfully.")
@@ -289,7 +289,7 @@ if __name__ == "__main__":
         attn_implementation="flash_attention_2",
     )
     if args.init_checkpoint is not None:
-        state_dict = torch.load(args.init_checkpoint, map_location="cpu")
+        state_dict = torch.load(args.init_checkpoint, map_location="cpu", weights_only=True)
         ref_model.pretrained_model.load_state_dict(state_dict)
         del state_dict
 
@@ -364,6 +364,7 @@ if __name__ == "__main__":
         save_total_limit=3,
         seed=args.seed,
         report_to="wandb",
+        gradient_checkpointing=True,
         stop_token="eos",
     )
 
@@ -399,3 +400,39 @@ if __name__ == "__main__":
     else:
         torch.save(policy_model.state_dict(), pt_path)
     print(f">>> State dict saved to {pt_path}")
+
+    # ─── Post-Training Evaluation (generation-based) ───────────────
+    import gc
+
+    # Save the base model (without value head) for vLLM compatibility
+    eval_model_dir = os.path.join(args.output_dir, "eval_model")
+    print(f">>> Saving base model (without value head) for evaluation: {eval_model_dir}")
+    if hasattr(policy_model, "pretrained_model"):
+        policy_model.pretrained_model.save_pretrained(eval_model_dir)
+    else:
+        policy_model.save_pretrained(eval_model_dir)
+    tokenizer.save_pretrained(eval_model_dir)
+
+    print("\n>>> Freeing training objects for post-training evaluation...")
+    del trainer
+    del policy_model
+    del ref_model
+    del value_model
+    del reward_model
+    gc.collect()
+    torch.cuda.empty_cache()
+
+    eval_output = os.path.join(args.output_dir, "trl_ppo_eval_results.jsonl")
+    metrics = run_post_training_eval(
+        model_path=eval_model_dir,
+        dataset_name=args.dataset,
+        eval_data_path=eval_path,
+        prompt_template=prompt_template,
+        output_filepath=eval_output,
+        seed=args.seed,
+        model_id=args.model_id,
+    )
+    print(f"\n>>> Post-training evaluation results:")
+    print(f"    Format Accuracy:  {metrics['format_accuracy']:.2f}%")
+    print(f"    Answer Accuracy:  {metrics['answer_accuracy']:.2f}%")
+    print(f"    Overall Accuracy: {metrics['accuracy']:.2f}%")

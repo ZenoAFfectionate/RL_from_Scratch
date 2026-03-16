@@ -23,7 +23,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model_name",
         type=str,
-        default="IIGroup/X-Coder-RL-Qwen3-8B",
+        default="Qwen/Qwen3.5-2B",
         help="The name or path of the model to use."
     )
     parser.add_argument(
@@ -47,14 +47,14 @@ if __name__ == "__main__":
 
     # load prompt template
     print(f"Loading prompt template ...", end=' ')
-    with open(f"../prompts/{args.dataset_name}.prompt", "r") as f:
+    with open(os.path.join(project_root, "prompts", f"{args.dataset_name}.prompt"), "r") as f:
         prompt_template = f.read()
     print("Success!\nLoaded prompt template.")
 
     # load dataset
     dataset = []
     print(f"Loading validation set ...", end=' ')
-    with open(f"../data/{args.dataset_name}/valid.jsonl", "r") as f:
+    with open(os.path.join(project_root, "data", args.dataset_name, "valid.jsonl"), "r") as f:
         for line in f: dataset.append(json.loads(line))
     print(f"Success!\nLoaded {len(dataset)} examples.")
 
@@ -88,5 +88,5 @@ if __name__ == "__main__":
         prompts=prompts,
         answers=truth_tests,
         eval_sampling_params=sampling_params,
-        output_filepath=f"../results/baseline_code.jsonl",
+        output_filepath=os.path.join(project_root, "results", "baseline_code.jsonl"),
     )

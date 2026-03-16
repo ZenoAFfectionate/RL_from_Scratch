@@ -10,8 +10,8 @@ def tokenize_prompt_and_output(
     tokenizer,
 ) -> List[Dict[str, torch.Tensor]]:
     """
-    Tokenize prompt+output pairs. Returns a list of per-sample dicts
-    with variable-length tensors (no global padding).
+    Tokenize prompt+output pairs. Returns a list of per-sample
+    dicts with variable-length tensors (no global padding).
     Sequence length is naturally bounded by the vLLM generation limit.
     """
     samples = []
@@ -20,8 +20,8 @@ def tokenize_prompt_and_output(
         output_ids = tokenizer(output, add_special_tokens=False).input_ids
 
         full_ids = prompt_ids + output_ids + [tokenizer.eos_token_id]
-        input_ids = full_ids[:-1]
-        labels = full_ids[1:]
+        input_ids = full_ids[:-1]  # 
+        labels = full_ids[1:]      # 
         seq_len = len(input_ids)
 
         # build response mask
@@ -29,8 +29,7 @@ def tokenize_prompt_and_output(
         response_mask = torch.zeros(seq_len, dtype=torch.bool)
         start = max(p_len - 1, 0)
         end = min(start + len(output_ids) + 1, seq_len)
-        if end > start:
-            response_mask[start:end] = True
+        if end > start: response_mask[start:end] = True
 
         samples.append({
             "input_ids": torch.tensor(input_ids, dtype=torch.long),

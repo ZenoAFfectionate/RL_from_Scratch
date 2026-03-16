@@ -18,9 +18,9 @@ from trainer.utils import load_prompt_template, load_jsonl, get_reward_fn
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run PPO on Qwen-Math model.")
+    parser = argparse.ArgumentParser(description="Run PPO training.")
 
-    parser.add_argument("--model_id", type=str, default="Qwen/Qwen2.5-Math-1.5B")
+    parser.add_argument("--model_id", type=str, default="Qwen/Qwen3.5-2B")
     parser.add_argument("--dataset", type=str, default="math", choices=["math", "code"])
 
 

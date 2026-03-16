@@ -27,12 +27,12 @@ def format_gsmk_prompt(example, prompt_template):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate a VLLM model on GSM8K (Zero-shot).")
     
-    parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-Math-1.5B")  # Qwen/Qwen3-1.7B
+    parser.add_argument("--model_name", type=str, default="Qwen/Qwen3.5-2B")
     parser.add_argument("--dataset_name", type=str, default="gsmk")
 
     parser.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature.")
     parser.add_argument("--top_p", type=float, default=1.0, help="Top-p sampling.")
-    parser.add_argument("--max_tokens", type=int, default=2048, help="Maximum number of tokens to generate.")
+    parser.add_argument("--max_tokens", type=int, default=16384, help="Maximum number of tokens to generate.")
 
     args = parser.parse_args()
 
@@ -45,14 +45,14 @@ if __name__ == "__main__":
 
     # load prompt template
     print(f"Loading prompt template ...", end=' ')
-    with open(f"../prompts/{args.dataset_name}.prompt", "r") as f:
+    with open(os.path.join(project_root, "prompts", f"{args.dataset_name}.prompt"), "r") as f:
         prompt_template = f.read()
     print("Success!\nLoaded prompt template.")
 
     # loading validation dataset
     dataset = []
     print(f"Loading validation set ...", end=' ')
-    with open(f"../data/{args.dataset_name}/valid.jsonl", "r") as f:
+    with open(os.path.join(project_root, "data", args.dataset_name, "valid.jsonl"), "r") as f:
         for line in f: dataset.append(json.loads(line))
     print(f"Success!\nLoaded {len(dataset)} examples.")
 
@@ -82,5 +82,5 @@ if __name__ == "__main__":
         prompts=prompts,
         answers=ground_truth,
         eval_sampling_params=sampling_params,
-        output_filepath=f"../results/baseline_gsmk.jsonl"
+        output_filepath=os.path.join(project_root, "results", "baseline_gsmk.jsonl")
     )

@@ -7,13 +7,13 @@ Merges the functionality of:
 
 Usage examples:
   # Chat SFT on ultrachat dataset
-  python sft_trainer.py --mode chat --model_id Qwen/Qwen3-1.7B
+  python sft_trainer.py --mode chat --model_id Qwen/Qwen3.5-2B
 
   # Reasoning SFT on math dataset
-  python sft_trainer.py --mode reasoning --dataset math --model_id Qwen/Qwen2.5-Math-1.5B
+  python sft_trainer.py --mode reasoning --dataset math --model_id Qwen/Qwen3.5-2B
 
   # Reasoning SFT on code dataset
-  python sft_trainer.py --mode reasoning --dataset code --model_id Qwen/Qwen2.5-Math-1.5B
+  python sft_trainer.py --mode reasoning --dataset code --model_id Qwen/Qwen3.5-2B
 """
 
 import os
@@ -42,7 +42,7 @@ from trainer.utils import load_prompt_template, load_jsonl, get_reward_fn
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Unified SFT Trainer (Chat + Reasoning)")
 
-    parser.add_argument("--model_id", type=str, default="Qwen/Qwen3-1.7B")
+    parser.add_argument("--model_id", type=str, default="Qwen/Qwen3.5-2B")
     parser.add_argument("--mode", type=str, default="chat",
                         choices=["chat", "reasoning"],
                         help="Training mode: 'chat' for ultrachat, 'reasoning' for math/code/gsmk.")

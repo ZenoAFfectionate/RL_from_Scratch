@@ -4,7 +4,7 @@ This project implements a comprehensive framework for aligning Large Language Mo
 
 ## Overview
 
-- **Foundation Model**: Built on Qwen2.5 series models (Qwen2.5-Math for mathematical reasoning, Qwen3 for dialogue tasks), leveraging state-of-the-art open-source LLM capabilities
+- **Foundation Model**: Built on Qwen3.5-2B, a compact yet capable open-source LLM from the Qwen model family
 - **Chain-of-Thought Data Construction**: Novel approach to construct reasoning datasets using one-shot prompting and N-sampling with Qwen-Math models, achieving 99.2% accuracy
 - **Supervised Fine-Tuning**: Implements efficient SFT with gradient accumulation, sequence packing, and response masking for both chat and math domains
 - **Reinforcement Learning Algorithms**: Features DPO for preference-based alignment on dialogue tasks, GRPO for reward-based optimization on mathematical reasoning, and PPO for general RL fine-tuning
@@ -31,73 +31,6 @@ This project implements a comprehensive framework for aligning Large Language Mo
   - [GRPO Algorithm](#grpo-algorithm)
 - [Speculative Decoding](#speculative-decoding)
 
-## Project Structure
-
-```
-Assignment_5/
-├── algorithms/             # Core algorithm implementations
-│   ├── sft4chat.py         # SFT algorithm for chat
-│   ├── sft4reas.py         # SFT algorithm for reasoning
-│   ├── dpo.py              # DPO algorithm
-│   ├── grpo.py             # GRPO algorithm
-│   ├── ppo.py              # PPO algorithm
-│   ├── speculative.py      # Speculative decoding
-│   └── utils.py            # Shared algorithm utilities
-│
-├── trainer/                # Custom training loop scripts
-│   ├── utils.py            # Shared: prompt loading, data loading, reward functions
-│   ├── sft_trainer.py      # Unified SFT (chat + reasoning modes)
-│   ├── dpo_trainer.py      # DPO trainer
-│   ├── grpo_trainer.py     # GRPO trainer
-│   └── ppo_trainer.py      # PPO trainer
-│
-├── trl_trainer/            # HuggingFace TRL-based training scripts
-│   ├── utils.py            # Shared: prompt loading, reward functions, TRL wrappers
-│   ├── sft_trainer.py      # TRL SFTTrainer (chat + reasoning modes)
-│   ├── dpo_trainer.py      # TRL DPOTrainer
-│   ├── grpo_trainer.py     # TRL GRPOTrainer
-│   └── ppo_trainer.py      # TRL PPOTrainer
-│
-├── baseline/               # Baseline evaluation scripts
-│   ├── baseline_math.py    # MATH benchmark
-│   ├── baseline_gsmk.py    # GSM8K benchmark
-│   ├── baseline_code.py    # Code benchmark
-│   ├── baseline_mmlu.py    # MMLU benchmark
-│   ├── baseline_alpa.py    # AlpacaEval benchmark
-│   └── baseline_ssts.py    # SimpleSafetyTests benchmark
-│
-├── prompts/                # Prompt templates (single source of truth)
-│   ├── math.prompt         # Math reasoning template
-│   ├── code.prompt         # Code generation template
-│   ├── gsmk.prompt         # GSM8K template
-│   ├── rlhf.prompt         # RLHF / chat template
-│   ├── mmlu.prompt         # MMLU template
-│   └── ssts.prompt         # Safety tests template
-│
-├── data/                   # Datasets
-│   ├── math/               # MATH dataset (train.jsonl, valid.jsonl)
-│   ├── gsmk/               # GSM8K dataset
-│   ├── code/               # Code dataset
-│   ├── rlhf/               # RLHF preference data
-│   ├── ultrachat/          # UltraChat dataset
-│   ├── mmlu/               # MMLU dataset
-│   ├── alpa/               # AlpacaEval dataset
-│   ├── ssts/               # SimpleSafetyTests dataset
-│   └── lm_dataset.py       # Dataset utilities
-│
-├── utils/                  # Project-level utilities
-│   ├── rewards.py          # Reward functions (dsr1, gsmk, code)
-│   ├── vllm_helper.py      # vLLM initialization helpers
-│   ├── math_utils.py       # Math evaluation utilities
-│   └── code_utils.py       # Code evaluation utilities
-│
-├── checkpoints/            # Checkpoints from trainer/
-├── [TRL]checkpoints/       # Checkpoints from trl_trainer/
-├── results/                # Evaluation results from trainer/
-├── [TRL]results/           # Evaluation results from trl_trainer/
-└── tests/                  # Unit tests
-```
-
 **Output directory convention:**
 
 | Source | Checkpoints | Results |
@@ -113,22 +46,22 @@ The `baseline/` folder contains evaluation scripts for various benchmarks using 
 
 ```bash
 # Evaluate on MATH dataset
-python baseline/baseline_math.py --model_id Qwen/Qwen2.5-Math-7B-Instruct
+python baseline/baseline_math.py --model_name Qwen/Qwen3.5-2B
 
 # Evaluate on GSM8K dataset
-python baseline/baseline_gsmk.py --model_id Qwen/Qwen2.5-Math-7B-Instruct
+python baseline/baseline_gsmk.py --model_name Qwen/Qwen3.5-2B
 
 # Evaluate on Code dataset
-python baseline/baseline_code.py --model_id Qwen/Qwen2.5-Math-7B-Instruct
+python baseline/baseline_code.py --model_name Qwen/Qwen3.5-2B
 
 # Evaluate on MMLU benchmark
-python baseline/baseline_mmlu.py --model_id Qwen/Qwen3-1.7B
+python baseline/baseline_mmlu.py --model_name Qwen/Qwen3.5-2B
 
 # Generate responses for AlpacaEval
-python baseline/baseline_alpa.py --model_id Qwen/Qwen3-1.7B
+python baseline/baseline_alpa.py --model_name Qwen/Qwen3.5-2B
 
 # Run SimpleSafetyTests evaluation
-python baseline/baseline_ssts.py --model_id Qwen/Qwen3-1.7B
+python baseline/baseline_ssts.py --model_name Qwen/Qwen3.5-2B
 ```
 
 ---
@@ -146,7 +79,7 @@ Fine-tune on the UltraChat dataset for conversational tasks:
 ```bash
 python trainer/sft_trainer.py \
     --mode chat \
-    --model_id Qwen/Qwen3-1.7B \
+    --model_id Qwen/Qwen3.5-2B \
     --lr 1e-5 \
     --epochs 2 \
     --batch_size 32 \
@@ -165,7 +98,7 @@ Fine-tune on math/code/gsmk datasets with chain-of-thought:
 python trainer/sft_trainer.py \
     --mode reasoning \
     --dataset math \
-    --model_id Qwen/Qwen2.5-Math-1.5B \
+    --model_id Qwen/Qwen3.5-2B \
     --lr 5e-6 \
     --epochs 2 \
     --batch_size 32 \
@@ -175,13 +108,13 @@ python trainer/sft_trainer.py \
 python trainer/sft_trainer.py \
     --mode reasoning \
     --dataset code \
-    --model_id Qwen/Qwen2.5-Math-1.5B
+    --model_id Qwen/Qwen3.5-2B
 
 # GSM8K
 python trainer/sft_trainer.py \
     --mode reasoning \
     --dataset gsmk \
-    --model_id Qwen/Qwen2.5-Math-1.5B
+    --model_id Qwen/Qwen3.5-2B
 ```
 
 Checkpoints: `checkpoints/SFT4{dataset}/` (e.g., `checkpoints/SFT4math/`)
@@ -192,7 +125,7 @@ Preference-based alignment on RLHF data (requires 2 GPUs: policy + reference mod
 
 ```bash
 python trainer/dpo_trainer.py \
-    --model_id Qwen/Qwen3-1.7B \
+    --model_id Qwen/Qwen3.5-2B \
     --dataset rlhf \
     --beta 0.2 \
     --lr 5e-6 \
@@ -212,7 +145,7 @@ Reward-based RL for math/code reasoning (requires 2 GPUs: training + vLLM):
 ```bash
 python trainer/grpo_trainer.py \
     --dataset math \
-    --model_id Qwen/Qwen2.5-Math-1.5B \
+    --model_id Qwen/Qwen3.5-2B \
     --lr 5e-6 \
     --num_iterations 250 \
     --num_generations 8 \
@@ -237,7 +170,7 @@ Proximal Policy Optimization for math/code reasoning (requires 2 GPUs):
 ```bash
 python trainer/ppo_trainer.py \
     --dataset math \
-    --model_id Qwen/Qwen2.5-Math-1.5B \
+    --model_id Qwen/Qwen3.5-2B \
     --lr 1e-5 \
     --num_iterations 200 \
     --batch_size 32 \
@@ -262,7 +195,7 @@ These trainers use HuggingFace's [TRL](https://github.com/huggingface/trl) libra
 ```bash
 python trl_trainer/sft_trainer.py \
     --mode chat \
-    --model_id Qwen/Qwen3-1.7B \
+    --model_id Qwen/Qwen3.5-2B \
     --lr 2e-5 \
     --epochs 2 \
     --batch_size 32 \
@@ -280,7 +213,7 @@ Checkpoints: `[TRL]checkpoints/SFT4Chat/`
 python trl_trainer/sft_trainer.py \
     --mode reasoning \
     --dataset math \
-    --model_id Qwen/Qwen2.5-Math-1.5B \
+    --model_id Qwen/Qwen3.5-2B \
     --lr 5e-6 \
     --epochs 2 \
     --batch_size 32 \
@@ -290,7 +223,7 @@ python trl_trainer/sft_trainer.py \
 python trl_trainer/sft_trainer.py \
     --mode reasoning \
     --dataset code \
-    --model_id Qwen/Qwen2.5-Math-1.5B
+    --model_id Qwen/Qwen3.5-2B
     --lr 5e-6 \
     --epochs 2 \
     --batch_size 32 \
@@ -300,7 +233,7 @@ python trl_trainer/sft_trainer.py \
 python trl_trainer/sft_trainer.py \
     --mode reasoning \
     --dataset gsmk \
-    --model_id Qwen/Qwen2.5-Math-1.5B
+    --model_id Qwen/Qwen3.5-2B
     --lr 5e-6 \
     --epochs 2 \
     --batch_size 32 \
@@ -313,7 +246,7 @@ Checkpoints: `[TRL]checkpoints/SFT4{dataset}/`
 
 ```bash
 python trl_trainer/dpo_trainer.py \
-    --model_id Qwen/Qwen3-1.7B \
+    --model_id Qwen/Qwen3.5-2B \
     --dataset rlhf \
     --beta 0.2 \
     --lr 5e-6 \
@@ -333,7 +266,7 @@ Checkpoints: `[TRL]checkpoints/DPO/`
 ```bash
 python trl_trainer/grpo_trainer.py \
     --dataset math \
-    --model_id Qwen/Qwen2.5-Math-1.5B \
+    --model_id Qwen/Qwen3.5-2B \
     --lr 5e-6 \
     --max_steps 250 \
     --num_generations 8 \
@@ -354,7 +287,7 @@ Checkpoints: `[TRL]checkpoints/GRPO4{dataset}/`
 ```bash
 python trl_trainer/ppo_trainer.py \
     --dataset math \
-    --model_id Qwen/Qwen2.5-Math-1.5B \
+    --model_id Qwen/Qwen3.5-2B \
     --lr 1e-5 \
     --total_episodes 6400 \
     --batch_size 32 \
@@ -394,9 +327,10 @@ All trainers now load prompts at runtime via `load_prompt_template(dataset_name)
 Both `trainer/` and `trl_trainer/` now have a `utils.py` module that centralizes shared logic:
 
 - **`load_prompt_template(dataset_name)`** — Reads the corresponding `.prompt` file from `prompts/`
-- **`get_reward_fn(dataset_name)`** — Returns the appropriate reward function (`dsr1_reward_fn`, `gsmk_reward_fn`, or `code_reward_fn`)
+- **`get_reward_fn(dataset_name)`** — Returns the appropriate reward function (`dsr1_reward_fn`, `gsmk_reward_fn`, `code_reward_fn`, or `mmlu_reward_fn`)
 - **`load_jsonl(path)`** — Convenience function for loading JSONL data files (in `trainer/utils.py`)
 - **`make_trl_reward_fn()`** — Wraps reward functions to match TRL's expected interface (in `trl_trainer/utils.py`)
+- **`run_post_training_eval()`** — Runs generation-based evaluation via vLLM after training completes (in `trl_trainer/utils.py`)
 
 This eliminates repeated `from utils.rewards import ...` and inline `open()` calls scattered across trainer files.
 
@@ -438,6 +372,35 @@ To avoid checkpoint/result collisions between the two trainer implementations:
 ### PPO Trainer
 
 A full PPO training pipeline was added to both `trainer/` and `trl_trainer/`, supporting math and code datasets with verifiable reward functions. The TRL version includes a `VerifiableRewardModel` wrapper that bridges the project's reward functions with TRL's expected reward model interface.
+
+### Post-Training Evaluation for TRL Trainers
+
+All TRL-based trainers now include an automatic **generation-based evaluation** step that runs after training completes. This measures whether training actually improved the model's problem-solving ability, beyond training-style metrics like loss and reward.
+
+**How it works:**
+1. Training completes and the model is saved to disk
+2. Training objects (trainer, model, optimizer) are deleted and GPU VRAM is freed
+3. The saved model is loaded into vLLM for efficient inference
+4. Greedy decoding generates completions on the evaluation set
+5. Completions are scored with the appropriate reward function
+6. Format accuracy, answer accuracy, and overall accuracy are printed and saved to JSONL
+
+**Evaluation benchmarks by trainer:**
+
+| Trainer | Training Domain | Eval Benchmark | Eval Metric |
+|---|---|---|---|
+| SFT (reasoning) | math / code / gsmk | Dataset's own `valid.jsonl` | Task-specific reward fn |
+| SFT (chat) | UltraChat | **MMLU** `valid.jsonl` | Multiple-choice accuracy |
+| DPO | RLHF preferences | **MMLU** `valid.jsonl` | Multiple-choice accuracy |
+| GRPO | math / code / gsmk | Dataset's own `valid.jsonl` | Task-specific reward fn |
+| PPO | math / code / gsmk | Dataset's own `valid.jsonl` | Task-specific reward fn |
+
+For chat-domain trainers (SFT chat, DPO), the **MMLU** benchmark is used because:
+- Chat/RLHF training data lacks verifiable answers, making task-specific eval infeasible
+- MMLU is a widely-used, quantifiable benchmark (multiple-choice with ground truth A/B/C/D)
+- It measures whether chat fine-tuning preserves or improves the model's general knowledge and reasoning
+
+Per-example results are saved to `<output_dir>/trl_<algo>_eval_results.jsonl` for analysis.
 
 ---
 
@@ -845,19 +808,68 @@ To run speculative decoding inference:
 ```bash
 # Single mode with async pipeline
 python inference.py --mode single --use_async_pipeline \
-    --draft_model Qwen/Qwen2.5-Math-1.5B-Instruct \
-    --target_model Qwen/Qwen2.5-Math-7B-Instruct
+    --draft_model Qwen/Qwen3.5-2B-Instruct \
+    --target_model Qwen/Qwen3.5-2B-Instruct
 
 # Batch mode for high throughput
 python inference.py --mode batch --batch_size 32 \
     --num_speculative_tokens 16 --adaptive_k
 ```
 
-The speculative decoding implementation achieves significant speedups over standard autoregressive decoding, with the exact improvement depending on the acceptance rate between the draft and target models. For the Qwen-Math model family, typical acceptance rates range from 60-80%, resulting in 1.5-2.5x throughput improvements.
+The speculative decoding implementation achieves significant speedups over standard autoregressive decoding, with the exact improvement depending on the acceptance rate between the draft and target models. For the Qwen model family, typical acceptance rates range from 60-80%, resulting in 1.5-2.5x throughput improvements.
 
 
-## Experiment Result
+## Experiment Results
 
+All experiments use **Qwen3.5-2B** as the foundation model. We evaluate across three stages — Baseline (pretrained model, zero-shot), SFT (supervised fine-tuning on domain-specific data), and RL (GRPO reinforcement learning) — to demonstrate the progressive improvement from each training phase.
+
+### Reasoning Tasks (MATH & Code)
+
+These benchmarks use verifiable rewards: math problems are checked against ground-truth answers, and code solutions are validated by executing test cases. **Format Accuracy** measures whether the model follows the required `<think>...</think><answer>...</answer>` output format. **Answer Accuracy** measures whether the extracted answer is mathematically or functionally correct.
+
+| Benchmark | Stage | Format Accuracy | Answer Accuracy |
+|-----------|-------|:-:|:-:|
+| **MATH** (4,000 problems) | Baseline | 38.05% | 20.65% |
+| | SFT | 87.78% | 50.18% |
+| | GRPO | **95.67%** | **74.88%** |
+| **Code** (4,000 / 3,000 problems) | Baseline | 13.08% | 0.83% |
+| | SFT | 95.00% | 3.62% |
+| | GRPO | **97.73%** | **29.93%** |
+
+**Key observations:**
+
+- **SFT dramatically improves format compliance.** On MATH, format accuracy jumps from 38.05% to 87.78%; on Code, from 13.08% to 95.00%. The pretrained model struggles to follow the structured `<think>/<answer>` format, but SFT effectively teaches it.
+- **GRPO provides substantial answer accuracy gains beyond SFT.** On MATH, answer accuracy improves from 50.18% (SFT) to 74.88% (GRPO), a +24.7 percentage point gain. On Code, the improvement is even more striking: from 3.62% to 29.93% (+26.3 pp). This demonstrates that RL with verifiable rewards can optimize the model's actual problem-solving ability far beyond what imitation learning achieves.
+- **Format and content co-improve under RL.** GRPO not only boosts answer correctness but also further tightens format compliance (95.67% and 97.73%), showing that reward-based training reinforces both structural and semantic quality.
+
+### Other Baseline Benchmarks
+
+The following benchmarks were evaluated on the pretrained Qwen3.5-2B model to establish baseline capabilities across diverse tasks:
+
+| Benchmark | Eval Size | Metric | Result |
+|-----------|:-:|--------|:-:|
+| **GSM8K** | 1,319 | Answer Accuracy | 38.97% |
+| **MMLU** | 1,816 | Answer Accuracy | 0.50% |
+| **SimpleSafetyTests** | 100 | Refusal Rate | 92.0% |
+| **AlpacaEval** | 805 | — (generation only) | — |
+
+**Notes:**
+
+- **GSM8K** achieves 100% format accuracy and 38.97% answer accuracy at baseline, as GSM8K problems are simpler and the model's chain-of-thought naturally fits the expected format.
+- **MMLU** shows near-zero accuracy (0.50%) because the evaluation requires the model to output answers in a specific single-letter format (A/B/C/D) that the base model does not follow without instruction tuning (format accuracy is only 0.66%).
+- **SimpleSafetyTests** shows a 92.0% refusal rate, indicating the pretrained model already has reasonable safety alignment. The remaining 8% of non-refusals are concentrated in the "Suicide, Self-Harm, and Eating Disorders" (6 cases) and "Child Abuse" (2 cases) categories.
+
+### Training Details
+
+| Hyperparameter | SFT (Math) | GRPO (Math) |
+|---|:-:|:-:|
+| Learning Rate | 5e-6 | 5e-6 |
+| Epochs / Iterations | 2 epochs (500 steps) | 250 iterations |
+| Batch Size | 32 | 32 |
+| Micro Batch | 2 | 2 |
+| Group Size (GRPO) | — | 8 |
+| KL Coefficient (GRPO) | — | 0.01 |
+| Training Framework | HuggingFace TRL | Custom trainer |
 
 
 ## Reference

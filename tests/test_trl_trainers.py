@@ -353,7 +353,7 @@ class TestPPOTrainer:
         from trl_trainer.ppo_trainer import VerifiableRewardModel
         from transformers import AutoTokenizer
 
-        tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-Math-1.5B")
+        tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3.5-2B")
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
 
